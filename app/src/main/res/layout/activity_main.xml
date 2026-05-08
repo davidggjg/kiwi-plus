@@ -65,18 +65,6 @@
 
         </LinearLayout>
 
-        <!-- Tor Status Bar -->
-        <TextView
-            android:id="@+id/torStatus"
-            android:layout_width="match_parent"
-            android:layout_height="20dp"
-            android:background="#0d0d1a"
-            android:text="🔴 מתחבר ל-Tor..."
-            android:textColor="#888888"
-            android:textSize="10sp"
-            android:gravity="center"
-            android:paddingHorizontal="8dp" />
-
         <ProgressBar
             android:id="@+id/progressBar"
             style="?android:attr/progressBarStyleHorizontal"
