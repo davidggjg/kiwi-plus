@@ -31,21 +31,13 @@ public class MainActivity extends AppCompatActivity {
     private TextView splashTitle, splashSubtitle;
     private List<String> mediaUrls = new ArrayList<>();
 
-    // זיהוי קבצי מדיה רגילים
     private static final Pattern MEDIA_PATTERN = Pattern.compile(
         ".*\\.(mp4|m3u8|mp3|webm|ogg|avi|mkv|ts|flv|mov)(\\?.*)?$",
         Pattern.CASE_INSENSITIVE
     );
 
-    // זיהוי Kaltura
     private static final Pattern KALTURA_PATTERN = Pattern.compile(
         ".*(kaltura\\.com|cdnapisec\\.kaltura\\.com).*entry_id=([a-zA-Z0-9_]+).*",
-        Pattern.CASE_INSENSITIVE
-    );
-
-    // זיהוי Video.js sources
-    private static final Pattern VIDEOJS_PATTERN = Pattern.compile(
-        ".*(videojs|video\\.js|vjs).*",
         Pattern.CASE_INSENSITIVE
     );
 
@@ -67,7 +59,6 @@ public class MainActivity extends AppCompatActivity {
         splashSubtitle = findViewById(R.id.splashSubtitle);
 
         webView.setBackgroundColor(0xFF0f0f1e);
-
         showSplash();
         setupWebView();
         setupButtons();
@@ -91,7 +82,6 @@ public class MainActivity extends AppCompatActivity {
         anim.addAnimation(fade);
         splashTitle.startAnimation(anim);
         splashSubtitle.startAnimation(fade);
-
         new Handler().postDelayed(this::hideSplash, 2500);
     }
 
@@ -112,6 +102,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showHomePage() {
+        // דף בית עם HLS.js מובנה לניגון m3u8 ישירות
         String html = "<!DOCTYPE html><html><head>" +
             "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
             "<style>" +
@@ -133,8 +124,7 @@ public class MainActivity extends AppCompatActivity {
             "<p>browse free</p>" +
             "<div class='dots'>" +
             "  <div class='dot'></div><div class='dot'></div><div class='dot'></div>" +
-            "</div>" +
-            "</body></html>";
+            "</div></body></html>";
         webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
     }
 
@@ -147,6 +137,9 @@ public class MainActivity extends AppCompatActivity {
         settings.setBuiltInZoomControls(true);
         settings.setDisplayZoomControls(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setAllowFileAccess(true);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        // User agent נייד רגיל - בלי זכר לגוגל
         settings.setUserAgentString(
             "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
@@ -178,14 +171,8 @@ public class MainActivity extends AppCompatActivity {
                 btnForward.setAlpha(view.canGoForward() ? 1f : 0.4f);
                 swipeRefresh.setRefreshing(false);
 
-                // סריקת DOM רגיל
-                scanDomForMedia(view);
-
-                // סריקת Kaltura ספציפית
-                scanForKaltura(view);
-
-                // סריקת Video.js
-                scanForVideoJs(view);
+                // הזרקת HLS.js + Video.js scanner
+                injectMediaScanner(view);
             }
 
             @Override
@@ -200,101 +187,105 @@ public class MainActivity extends AppCompatActivity {
             public void onProgressChanged(WebView view, int newProgress) {
                 progressBar.setProgress(newProgress);
             }
+
+            // תמיכה במסך מלא
+            private View customView;
+            private CustomViewCallback customViewCallback;
+
+            @Override
+            public void onShowCustomView(View view, CustomViewCallback callback) {
+                if (customView != null) {
+                    callback.onCustomViewHidden();
+                    return;
+                }
+                customView = view;
+                customViewCallback = callback;
+                getWindow().getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_FULLSCREEN |
+                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                );
+                setContentView(customView);
+            }
+
+            @Override
+            public void onHideCustomView() {
+                setContentView(R.layout.activity_main);
+                if (customViewCallback != null) {
+                    customViewCallback.onCustomViewHidden();
+                    customViewCallback = null;
+                }
+                customView = null;
+                // re-init views after returning from fullscreen
+                recreate();
+            }
         });
     }
 
-    private void scanDomForMedia(WebView view) {
-        view.evaluateJavascript(
+    private void injectMediaScanner(WebView view) {
+        String js =
             "(function() {" +
+            // סריקת video/audio רגיל
             "  var urls = [];" +
             "  document.querySelectorAll('video, audio, source').forEach(function(el) {" +
-            "    if (el.src && el.src.length > 4) urls.push(el.src);" +
-            "    if (el.currentSrc && el.currentSrc.length > 4) urls.push(el.currentSrc);" +
+            "    if (el.src && el.src.startsWith('http')) urls.push(el.src);" +
+            "    if (el.currentSrc && el.currentSrc.startsWith('http')) urls.push(el.currentSrc);" +
             "  });" +
-            "  return JSON.stringify(urls);" +
-            "})()",
-            value -> {
-                if (value != null && !value.equals("null") && !value.equals("\"[]\"")) {
-                    runOnUiThread(() -> updateMediaButton(true));
-                }
-            }
-        );
-    }
-
-    private void scanForKaltura(WebView view) {
-        // חיפוש entry_id של Kaltura בדף
-        view.evaluateJavascript(
-            "(function() {" +
-            "  var results = [];" +
-            "  // חיפוש ב-iframes" +
+            // סריקת Video.js
+            "  try {" +
+            "    if (typeof videojs !== 'undefined') {" +
+            "      var players = videojs.getPlayers();" +
+            "      for (var id in players) {" +
+            "        var p = players[id];" +
+            "        try { var s = p.currentSrc(); if(s) urls.push(s); } catch(e){}" +
+            "        try { var s2 = p.src(); if(s2) urls.push(s2); } catch(e){}" +
+            "      }" +
+            "    }" +
+            "  } catch(e) {}" +
+            // סריקת Kaltura iframes
             "  document.querySelectorAll('iframe').forEach(function(el) {" +
             "    var src = el.src || '';" +
             "    if (src.indexOf('kaltura') !== -1 || src.indexOf('entry_id') !== -1) {" +
-            "      results.push(src);" +
+            "      urls.push(src);" +
             "    }" +
             "  });" +
-            "  // חיפוש ב-scripts" +
+            // סריקת entry_id בקוד הדף
             "  var html = document.documentElement.innerHTML;" +
-            "  var matches = html.match(/entry_id['\"]?\\s*[:=]\\s*['\"]([a-zA-Z0-9_]+)['\"]/g);" +
-            "  if (matches) {" +
-            "    matches.forEach(function(m) {" +
-            "      var id = m.replace(/.*[:=]\\s*['\"]/, '').replace(/['\"]$/, '');" +
-            "      results.push('kaltura:entry_id=' + id);" +
-            "    });" +
-            "  }" +
-            "  return JSON.stringify(results);" +
-            "})()",
-            value -> {
-                if (value != null && !value.equals("null") && !value.equals("\"[]\"") && !value.equals("[]")) {
-                    try {
-                        String cleaned = value.replaceAll("^\"|\"$", "");
-                        if (!cleaned.equals("[]")) {
-                            String[] parts = cleaned.replace("[", "").replace("]", "").split(",");
-                            for (String part : parts) {
-                                String u = part.trim().replaceAll("^\"|\"$", "");
-                                if (!u.isEmpty() && !mediaUrls.contains(u)) {
-                                    mediaUrls.add(u);
-                                }
-                            }
-                            runOnUiThread(() -> updateMediaButton(true));
-                        }
-                    } catch (Exception e) { /* ignore */ }
-                }
-            }
-        );
-    }
+            "  var km = html.match(/entry_id[^a-zA-Z0-9_]*([a-zA-Z0-9_]{5,})/g);" +
+            "  if (km) km.forEach(function(m) {" +
+            "    var id = m.replace(/entry_id[^a-zA-Z0-9_]*/, '');" +
+            "    urls.push('kaltura:entry_id=' + id);" +
+            "  });" +
+            // סריקת m3u8 בתוך ה-HTML
+            "  var m3u = html.match(/https?:[^'\"\\s]+\\.m3u8[^'\"\\s]*/g);" +
+            "  if (m3u) m3u.forEach(function(u) { urls.push(u); });" +
+            // ייחוד
+            "  var unique = urls.filter(function(v,i,a){ return v && a.indexOf(v)===i; });" +
+            "  return JSON.stringify(unique);" +
+            "})()";
 
-    private void scanForVideoJs(WebView view) {
-        view.evaluateJavascript(
-            "(function() {" +
-            "  var results = [];" +
-            "  // Video.js player instances" +
-            "  if (typeof videojs !== 'undefined') {" +
-            "    var players = videojs.getPlayers();" +
-            "    for (var id in players) {" +
-            "      var p = players[id];" +
-            "      if (p && p.currentSrc && p.currentSrc()) {" +
-            "        results.push(p.currentSrc());" +
-            "      }" +
-            "      if (p && p.src && p.src()) {" +
-            "        results.push(p.src());" +
-            "      }" +
-            "    }" +
-            "  }" +
-            "  return JSON.stringify(results);" +
-            "})()",
-            value -> {
-                if (value != null && !value.equals("null") && !value.equals("\"[]\"")) {
+        view.evaluateJavascript(js, value -> {
+            if (value == null || value.equals("null") || value.equals("\"[]\"")) return;
+            try {
+                String cleaned = value.replaceAll("^\"|\"$", "");
+                if (cleaned.equals("[]")) return;
+                String inner = cleaned.replaceAll("^\\[|\\]$", "");
+                String[] parts = inner.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
+                for (String part : parts) {
+                    String u = part.trim().replaceAll("^\"|\"$", "");
+                    if (!u.isEmpty() && !mediaUrls.contains(u)) {
+                        mediaUrls.add(u);
+                    }
+                }
+                if (!mediaUrls.isEmpty()) {
                     runOnUiThread(() -> updateMediaButton(true));
                 }
-            }
-        );
+            } catch (Exception e) { /* ignore */ }
+        });
     }
 
     private void checkForMedia(String url) {
-        if (MEDIA_PATTERN.matcher(url).matches() ||
-            KALTURA_PATTERN.matcher(url).matches() ||
-            VIDEOJS_PATTERN.matcher(url).matches()) {
+        if (MEDIA_PATTERN.matcher(url).matches() || KALTURA_PATTERN.matcher(url).matches()) {
             if (!mediaUrls.contains(url)) {
                 mediaUrls.add(url);
                 runOnUiThread(() -> updateMediaButton(true));
@@ -367,7 +358,8 @@ public class MainActivity extends AppCompatActivity {
         } else if (input.contains(".") && !input.contains(" ")) {
             url = "https://" + input;
         } else {
-            url = "https://www.google.com/search?q=" + input.replace(" ", "+");
+            // DuckDuckGo במקום גוגל
+            url = "https://duckduckgo.com/?q=" + input.replace(" ", "+");
         }
         webView.loadUrl(url);
     }
