@@ -3,8 +3,13 @@ package com.kiwiplus.browser;
 import android.app.AlertDialog;
 import android.graphics.Bitmap;
 import android.os.Bundle;
+import android.os.Handler;
 import android.view.KeyEvent;
 import android.view.View;
+import android.view.animation.AlphaAnimation;
+import android.view.animation.Animation;
+import android.view.animation.ScaleAnimation;
+import android.view.animation.AnimationSet;
 import android.view.inputmethod.EditorInfo;
 import android.webkit.*;
 import android.widget.*;
@@ -22,6 +27,8 @@ public class MainActivity extends AppCompatActivity {
     private ProgressBar progressBar;
     private ImageButton btnBack, btnForward, btnRefresh, btnMedia;
     private SwipeRefreshLayout swipeRefresh;
+    private View splashScreen;
+    private TextView splashTitle, splashSubtitle;
     private List<String> mediaUrls = new ArrayList<>();
 
     private static final Pattern MEDIA_PATTERN = Pattern.compile(
@@ -42,12 +49,57 @@ public class MainActivity extends AppCompatActivity {
         btnRefresh = findViewById(R.id.btnRefresh);
         btnMedia = findViewById(R.id.btnMedia);
         swipeRefresh = findViewById(R.id.swipeRefresh);
+        splashScreen = findViewById(R.id.splashScreen);
+        splashTitle = findViewById(R.id.splashTitle);
+        splashSubtitle = findViewById(R.id.splashSubtitle);
 
+        showSplash();
         setupWebView();
         setupButtons();
         setupUrlBar();
+    }
 
-        webView.loadUrl("https://google.com");
+    private void showSplash() {
+        splashScreen.setVisibility(View.VISIBLE);
+        webView.setVisibility(View.GONE);
+
+        // אנימציית כניסה
+        AnimationSet anim = new AnimationSet(true);
+
+        ScaleAnimation scale = new ScaleAnimation(
+            0.5f, 1f, 0.5f, 1f,
+            Animation.RELATIVE_TO_SELF, 0.5f,
+            Animation.RELATIVE_TO_SELF, 0.5f
+        );
+        scale.setDuration(800);
+
+        AlphaAnimation fade = new AlphaAnimation(0f, 1f);
+        fade.setDuration(800);
+
+        anim.addAnimation(scale);
+        anim.addAnimation(fade);
+
+        splashTitle.startAnimation(anim);
+        splashSubtitle.startAnimation(fade);
+
+        // אחרי 2.5 שניות עובר לדפדפן
+        new Handler().postDelayed(() -> hideSplash(), 2500);
+    }
+
+    private void hideSplash() {
+        AlphaAnimation fadeOut = new AlphaAnimation(1f, 0f);
+        fadeOut.setDuration(500);
+        fadeOut.setAnimationListener(new Animation.AnimationListener() {
+            @Override public void onAnimationStart(Animation a) {}
+            @Override public void onAnimationRepeat(Animation a) {}
+            @Override
+            public void onAnimationEnd(Animation a) {
+                splashScreen.setVisibility(View.GONE);
+                webView.setVisibility(View.VISIBLE);
+                webView.loadUrl("about:blank");
+            }
+        });
+        splashScreen.startAnimation(fadeOut);
     }
 
     private void setupWebView() {
@@ -88,25 +140,18 @@ public class MainActivity extends AppCompatActivity {
                 btnForward.setAlpha(view.canGoForward() ? 1f : 0.4f);
                 swipeRefresh.setRefreshing(false);
 
-                // חיפוש media ב-DOM דרך JavaScript
                 view.evaluateJavascript(
                     "(function() {" +
                     "  var urls = [];" +
                     "  document.querySelectorAll('video, audio, source').forEach(function(el) {" +
-                    "    if (el.src) urls.push(el.src);" +
-                    "    if (el.currentSrc) urls.push(el.currentSrc);" +
+                    "    if (el.src && el.src.length > 0) urls.push(el.src);" +
+                    "    if (el.currentSrc && el.currentSrc.length > 0) urls.push(el.currentSrc);" +
                     "  });" +
                     "  return JSON.stringify(urls);" +
                     "})()",
                     value -> {
                         if (value != null && !value.equals("null") && !value.equals("\"[]\"")) {
-                            String cleaned = value.replace("\\\"", "\"")
-                                .replaceAll("^\"|\"$", "");
-                            runOnUiThread(() -> {
-                                if (!cleaned.equals("[]")) {
-                                    updateMediaButton(true);
-                                }
-                            });
+                            runOnUiThread(() -> updateMediaButton(true));
                         }
                     }
                 );
@@ -152,31 +197,42 @@ public class MainActivity extends AppCompatActivity {
         });
 
         btnRefresh.setOnClickListener(v -> webView.reload());
-
         btnMedia.setOnClickListener(v -> showMediaDialog());
-
         swipeRefresh.setOnRefreshListener(() -> webView.reload());
     }
 
     private void showMediaDialog() {
         if (mediaUrls.isEmpty()) {
-            Toast.makeText(this, "לא נמצאו קישורי מדיה בדף זה", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "לא נמצאו קישורי מדיה", Toast.LENGTH_SHORT).show();
             return;
         }
 
+        // בניית רשימה להצגה
         String[] items = mediaUrls.toArray(new String[0]);
+        StringBuilder allUrls = new StringBuilder();
+        for (String u : mediaUrls) allUrls.append(u).append("\n");
+        String allUrlsStr = allUrls.toString().trim();
+
         new AlertDialog.Builder(this)
-            .setTitle("🎬 קישורי מדיה שנמצאו")
+            .setTitle("🎬 קישורי מדיה (" + mediaUrls.size() + ")")
             .setItems(items, (dialog, which) -> {
-                android.content.ClipboardManager clipboard =
-                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                android.content.ClipData clip =
-                    android.content.ClipData.newPlainText("media url", items[which]);
-                clipboard.setPrimaryClip(clip);
-                Toast.makeText(this, "הקישור הועתק!", Toast.LENGTH_SHORT).show();
+                copyToClipboard(items[which]);
+                Toast.makeText(this, "✅ הקישור הועתק!", Toast.LENGTH_SHORT).show();
+            })
+            .setPositiveButton("📋 העתק הכל", (dialog, which) -> {
+                copyToClipboard(allUrlsStr);
+                Toast.makeText(this, "✅ כל הקישורים הועתקו!", Toast.LENGTH_SHORT).show();
             })
             .setNegativeButton("סגור", null)
             .show();
+    }
+
+    private void copyToClipboard(String text) {
+        android.content.ClipboardManager clipboard =
+            (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        android.content.ClipData clip =
+            android.content.ClipData.newPlainText("media url", text);
+        clipboard.setPrimaryClip(clip);
     }
 
     private void setupUrlBar() {
