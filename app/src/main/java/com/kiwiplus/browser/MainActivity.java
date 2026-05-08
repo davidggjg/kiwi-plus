@@ -16,16 +16,9 @@ import android.widget.*;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
-import org.torproject.android.service.OrbotHelper;
-import org.torproject.android.service.TorServiceConstants;
-
-import java.net.InetSocketAddress;
-import java.net.Proxy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
-
-import okhttp3.OkHttpClient;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -35,14 +28,24 @@ public class MainActivity extends AppCompatActivity {
     private ImageButton btnBack, btnForward, btnRefresh, btnMedia;
     private SwipeRefreshLayout swipeRefresh;
     private View splashScreen;
-    private TextView splashTitle, splashSubtitle, torStatus;
+    private TextView splashTitle, splashSubtitle;
     private List<String> mediaUrls = new ArrayList<>();
-    private boolean torReady = false;
 
-    private static final int TOR_SOCKS_PORT = 9050;
-
+    // זיהוי קבצי מדיה רגילים
     private static final Pattern MEDIA_PATTERN = Pattern.compile(
         ".*\\.(mp4|m3u8|mp3|webm|ogg|avi|mkv|ts|flv|mov)(\\?.*)?$",
+        Pattern.CASE_INSENSITIVE
+    );
+
+    // זיהוי Kaltura
+    private static final Pattern KALTURA_PATTERN = Pattern.compile(
+        ".*(kaltura\\.com|cdnapisec\\.kaltura\\.com).*entry_id=([a-zA-Z0-9_]+).*",
+        Pattern.CASE_INSENSITIVE
+    );
+
+    // זיהוי Video.js sources
+    private static final Pattern VIDEOJS_PATTERN = Pattern.compile(
+        ".*(videojs|video\\.js|vjs).*",
         Pattern.CASE_INSENSITIVE
     );
 
@@ -62,7 +65,6 @@ public class MainActivity extends AppCompatActivity {
         splashScreen = findViewById(R.id.splashScreen);
         splashTitle = findViewById(R.id.splashTitle);
         splashSubtitle = findViewById(R.id.splashSubtitle);
-        torStatus = findViewById(R.id.torStatus);
 
         webView.setBackgroundColor(0xFF0f0f1e);
 
@@ -70,40 +72,6 @@ public class MainActivity extends AppCompatActivity {
         setupWebView();
         setupButtons();
         setupUrlBar();
-        startTor();
-    }
-
-    private void startTor() {
-        torStatus.setText("🔴 מתחבר ל-Tor...");
-
-        OrbotHelper orbotHelper = OrbotHelper.get(this);
-        orbotHelper.addStatusCallback(new OrbotHelper.SimpleStatusCallback() {
-            @Override
-            public void onEnabled(android.content.Intent statusIntent) {
-                runOnUiThread(() -> {
-                    torReady = true;
-                    torStatus.setText("🟢 Tor פעיל");
-
-                    // הגדר proxy על WebView דרך system properties
-                    System.setProperty("http.proxyHost", "127.0.0.1");
-                    System.setProperty("http.proxyPort", String.valueOf(TOR_SOCKS_PORT));
-                    System.setProperty("https.proxyHost", "127.0.0.1");
-                    System.setProperty("https.proxyPort", String.valueOf(TOR_SOCKS_PORT));
-                });
-            }
-
-            @Override
-            public void onStatusTimeout() {
-                runOnUiThread(() -> torStatus.setText("⚠️ Tor - timeout"));
-            }
-
-            @Override
-            public void onNotYetInstalled() {
-                runOnUiThread(() -> torStatus.setText("⚠️ ללא Tor"));
-            }
-        });
-
-        orbotHelper.init();
     }
 
     private void showSplash() {
@@ -167,7 +135,6 @@ public class MainActivity extends AppCompatActivity {
             "  <div class='dot'></div><div class='dot'></div><div class='dot'></div>" +
             "</div>" +
             "</body></html>";
-
         webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
     }
 
@@ -211,21 +178,14 @@ public class MainActivity extends AppCompatActivity {
                 btnForward.setAlpha(view.canGoForward() ? 1f : 0.4f);
                 swipeRefresh.setRefreshing(false);
 
-                view.evaluateJavascript(
-                    "(function() {" +
-                    "  var urls = [];" +
-                    "  document.querySelectorAll('video, audio, source').forEach(function(el) {" +
-                    "    if (el.src && el.src.length > 0) urls.push(el.src);" +
-                    "    if (el.currentSrc && el.currentSrc.length > 0) urls.push(el.currentSrc);" +
-                    "  });" +
-                    "  return JSON.stringify(urls);" +
-                    "})()",
-                    value -> {
-                        if (value != null && !value.equals("null") && !value.equals("\"[]\"")) {
-                            runOnUiThread(() -> updateMediaButton(true));
-                        }
-                    }
-                );
+                // סריקת DOM רגיל
+                scanDomForMedia(view);
+
+                // סריקת Kaltura ספציפית
+                scanForKaltura(view);
+
+                // סריקת Video.js
+                scanForVideoJs(view);
             }
 
             @Override
@@ -243,8 +203,98 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void scanDomForMedia(WebView view) {
+        view.evaluateJavascript(
+            "(function() {" +
+            "  var urls = [];" +
+            "  document.querySelectorAll('video, audio, source').forEach(function(el) {" +
+            "    if (el.src && el.src.length > 4) urls.push(el.src);" +
+            "    if (el.currentSrc && el.currentSrc.length > 4) urls.push(el.currentSrc);" +
+            "  });" +
+            "  return JSON.stringify(urls);" +
+            "})()",
+            value -> {
+                if (value != null && !value.equals("null") && !value.equals("\"[]\"")) {
+                    runOnUiThread(() -> updateMediaButton(true));
+                }
+            }
+        );
+    }
+
+    private void scanForKaltura(WebView view) {
+        // חיפוש entry_id של Kaltura בדף
+        view.evaluateJavascript(
+            "(function() {" +
+            "  var results = [];" +
+            "  // חיפוש ב-iframes" +
+            "  document.querySelectorAll('iframe').forEach(function(el) {" +
+            "    var src = el.src || '';" +
+            "    if (src.indexOf('kaltura') !== -1 || src.indexOf('entry_id') !== -1) {" +
+            "      results.push(src);" +
+            "    }" +
+            "  });" +
+            "  // חיפוש ב-scripts" +
+            "  var html = document.documentElement.innerHTML;" +
+            "  var matches = html.match(/entry_id['\"]?\\s*[:=]\\s*['\"]([a-zA-Z0-9_]+)['\"]/g);" +
+            "  if (matches) {" +
+            "    matches.forEach(function(m) {" +
+            "      var id = m.replace(/.*[:=]\\s*['\"]/, '').replace(/['\"]$/, '');" +
+            "      results.push('kaltura:entry_id=' + id);" +
+            "    });" +
+            "  }" +
+            "  return JSON.stringify(results);" +
+            "})()",
+            value -> {
+                if (value != null && !value.equals("null") && !value.equals("\"[]\"") && !value.equals("[]")) {
+                    try {
+                        String cleaned = value.replaceAll("^\"|\"$", "");
+                        if (!cleaned.equals("[]")) {
+                            String[] parts = cleaned.replace("[", "").replace("]", "").split(",");
+                            for (String part : parts) {
+                                String u = part.trim().replaceAll("^\"|\"$", "");
+                                if (!u.isEmpty() && !mediaUrls.contains(u)) {
+                                    mediaUrls.add(u);
+                                }
+                            }
+                            runOnUiThread(() -> updateMediaButton(true));
+                        }
+                    } catch (Exception e) { /* ignore */ }
+                }
+            }
+        );
+    }
+
+    private void scanForVideoJs(WebView view) {
+        view.evaluateJavascript(
+            "(function() {" +
+            "  var results = [];" +
+            "  // Video.js player instances" +
+            "  if (typeof videojs !== 'undefined') {" +
+            "    var players = videojs.getPlayers();" +
+            "    for (var id in players) {" +
+            "      var p = players[id];" +
+            "      if (p && p.currentSrc && p.currentSrc()) {" +
+            "        results.push(p.currentSrc());" +
+            "      }" +
+            "      if (p && p.src && p.src()) {" +
+            "        results.push(p.src());" +
+            "      }" +
+            "    }" +
+            "  }" +
+            "  return JSON.stringify(results);" +
+            "})()",
+            value -> {
+                if (value != null && !value.equals("null") && !value.equals("\"[]\"")) {
+                    runOnUiThread(() -> updateMediaButton(true));
+                }
+            }
+        );
+    }
+
     private void checkForMedia(String url) {
-        if (MEDIA_PATTERN.matcher(url).matches()) {
+        if (MEDIA_PATTERN.matcher(url).matches() ||
+            KALTURA_PATTERN.matcher(url).matches() ||
+            VIDEOJS_PATTERN.matcher(url).matches()) {
             if (!mediaUrls.contains(url)) {
                 mediaUrls.add(url);
                 runOnUiThread(() -> updateMediaButton(true));
