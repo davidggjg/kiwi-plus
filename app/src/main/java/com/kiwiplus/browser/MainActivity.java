@@ -9,17 +9,37 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.animation.AlphaAnimation;
 import android.view.animation.Animation;
-import android.view.animation.ScaleAnimation;
 import android.view.animation.AnimationSet;
+import android.view.animation.ScaleAnimation;
 import android.view.inputmethod.EditorInfo;
-import android.webkit.*;
-import android.widget.*;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.widget.EditText;
+import android.widget.ImageButton;
+import android.widget.ProgressBar;
+import android.widget.TextView;
+import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
+import java.net.InetAddress;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
+
+import okhttp3.OkHttpClient;
+import okhttp3.Protocol;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.dnsoverhttps.DnsOverHttps;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -31,6 +51,9 @@ public class MainActivity extends AppCompatActivity {
     private View splashScreen;
     private TextView splashTitle, splashSubtitle;
     private List<String> mediaUrls = new ArrayList<>();
+    private boolean isHomePage = false;
+    private OkHttpClient dohClient;
+    private ExecutorService executor = Executors.newSingleThreadExecutor();
 
     private static final Pattern MEDIA_PATTERN = Pattern.compile(
         ".*\\.(mp4|m3u8|mp3|webm|ogg|avi|mkv|ts|flv|mov)(\\?.*)?$",
@@ -41,8 +64,6 @@ public class MainActivity extends AppCompatActivity {
         ".*(kaltura\\.com|cdnapisec\\.kaltura\\.com).*entry_id=([a-zA-Z0-9_]+).*",
         Pattern.CASE_INSENSITIVE
     );
-
-    private static final String HOME_URL = "https://kiwiplus.home";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -62,10 +83,38 @@ public class MainActivity extends AppCompatActivity {
         splashSubtitle = findViewById(R.id.splashSubtitle);
 
         webView.setBackgroundColor(0xFF0f0f1e);
+        setupDoH();
         showSplash();
         setupWebView();
         setupButtons();
         setupUrlBar();
+    }
+
+    private void setupDoH() {
+        // Cloudflare DoH - מוצפן, עוקף רימון
+        try {
+            OkHttpClient bootstrapClient = new OkHttpClient.Builder()
+                .protocols(Arrays.asList(Protocol.HTTP_2, Protocol.HTTP_1_1))
+                .build();
+
+            DnsOverHttps dns = new DnsOverHttps.Builder()
+                .client(bootstrapClient)
+                .url(okhttp3.HttpUrl.get("https://cloudflare-dns.com/dns-query"))
+                .bootstrapDnsHosts(Arrays.asList(
+                    InetAddress.getByName("1.1.1.1"),
+                    InetAddress.getByName("1.0.0.1")
+                ))
+                .includeIPv6(false)
+                .build();
+
+            dohClient = new OkHttpClient.Builder()
+                .dns(dns)
+                .protocols(Arrays.asList(Protocol.HTTP_2, Protocol.HTTP_1_1))
+                .build();
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     private void showSplash() {
@@ -105,6 +154,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showHomePage() {
+        isHomePage = true;
         urlBar.setText("");
         urlBar.setHint("חפש או הכנס כתובת");
         String html = "<!DOCTYPE html><html><head>" +
@@ -116,7 +166,9 @@ public class MainActivity extends AppCompatActivity {
             "  font-family: sans-serif; color:#fff; }" +
             "h1 { font-size:42px; color:#6c63ff; letter-spacing:4px; margin-bottom:8px; }" +
             "p { color:#555; font-size:14px; letter-spacing:2px; }" +
-            ".dots { margin-top:40px; display:flex; gap:8px; }" +
+            ".badge { margin-top:16px; background:#1a1a3e; border:1px solid #6c63ff;" +
+            "  padding:6px 16px; border-radius:20px; font-size:12px; color:#6c63ff; }" +
+            ".dots { margin-top:32px; display:flex; gap:8px; }" +
             ".dot { width:8px; height:8px; border-radius:50%; background:#6c63ff;" +
             "  animation: pulse 1.4s infinite ease-in-out; }" +
             ".dot:nth-child(2) { animation-delay:0.2s; }" +
@@ -126,10 +178,11 @@ public class MainActivity extends AppCompatActivity {
             "</style></head><body>" +
             "<h1>KiwiPlus</h1>" +
             "<p>browse free</p>" +
+            "<div class='badge'>🔒 DNS מוצפן פעיל</div>" +
             "<div class='dots'>" +
             "  <div class='dot'></div><div class='dot'></div><div class='dot'></div>" +
             "</div></body></html>";
-        webView.loadDataWithBaseURL(HOME_URL, html, "text/html", "UTF-8", null);
+        webView.loadData(html, "text/html; charset=utf-8", "UTF-8");
     }
 
     private void setupWebView() {
@@ -149,16 +202,41 @@ public class MainActivity extends AppCompatActivity {
         );
 
         webView.setWebViewClient(new WebViewClient() {
+
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
                 checkForMedia(url);
+
+                // נתב דרך DoH client
+                if (dohClient != null && (url.startsWith("https://") || url.startsWith("http://"))) {
+                    try {
+                        okhttp3.Request.Builder reqBuilder = new okhttp3.Request.Builder().url(url);
+                        request.getRequestHeaders().forEach(reqBuilder::addHeader);
+                        Response response = dohClient.newCall(reqBuilder.build()).execute();
+                        if (response.body() != null) {
+                            String contentType = response.header("Content-Type", "text/plain");
+                            String mimeType = contentType != null && contentType.contains(";")
+                                ? contentType.split(";")[0].trim() : contentType;
+                            return new WebResourceResponse(
+                                mimeType,
+                                "UTF-8",
+                                response.code(),
+                                response.message().isEmpty() ? "OK" : response.message(),
+                                new java.util.HashMap<>(),
+                                response.body().byteStream()
+                            );
+                        }
+                    } catch (Exception e) {
+                        // fallback לwebview רגיל
+                    }
+                }
                 return super.shouldInterceptRequest(view, request);
             }
 
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
-                if (url.startsWith("data:") || url.equals(HOME_URL)) return;
+                if (isHomePage) return;
                 mediaUrls.clear();
                 updateMediaButton(false);
                 progressBar.setVisibility(View.VISIBLE);
@@ -167,7 +245,10 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                if (url.startsWith("data:") || url.equals(HOME_URL)) return;
+                if (isHomePage) {
+                    isHomePage = false;
+                    return;
+                }
                 progressBar.setVisibility(View.GONE);
                 urlBar.setText(url);
                 btnBack.setAlpha(view.canGoBack() ? 1f : 0.4f);
@@ -194,10 +275,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onShowCustomView(View view, CustomViewCallback callback) {
-                if (customView != null) {
-                    callback.onCustomViewHidden();
-                    return;
-                }
+                if (customView != null) { callback.getClass(); return; }
                 customView = view;
                 customViewCallback = callback;
                 getWindow().getDecorView().setSystemUiVisibility(
@@ -241,38 +319,29 @@ public class MainActivity extends AppCompatActivity {
             "  } catch(e) {}" +
             "  document.querySelectorAll('iframe').forEach(function(el) {" +
             "    var src = el.src || '';" +
-            "    if (src.indexOf('kaltura') !== -1 || src.indexOf('entry_id') !== -1) {" +
-            "      urls.push(src);" +
-            "    }" +
+            "    if (src.indexOf('kaltura') !== -1 || src.indexOf('entry_id') !== -1) urls.push(src);" +
             "  });" +
             "  var html = document.documentElement.innerHTML;" +
             "  var km = html.match(/entry_id[^a-zA-Z0-9_]*([a-zA-Z0-9_]{5,})/g);" +
             "  if (km) km.forEach(function(m) {" +
-            "    var id = m.replace(/entry_id[^a-zA-Z0-9_]*/, '');" +
-            "    urls.push('kaltura:entry_id=' + id);" +
+            "    urls.push('kaltura:entry_id=' + m.replace(/entry_id[^a-zA-Z0-9_]*/, ''));" +
             "  });" +
             "  var m3u = html.match(/https?:[^'\"\\s]+\\.m3u8[^'\"\\s]*/g);" +
             "  if (m3u) m3u.forEach(function(u) { urls.push(u); });" +
-            "  var unique = urls.filter(function(v,i,a){ return v && a.indexOf(v)===i; });" +
-            "  return JSON.stringify(unique);" +
+            "  return JSON.stringify(urls.filter(function(v,i,a){ return v && a.indexOf(v)===i; }));" +
             "})()";
 
         view.evaluateJavascript(js, value -> {
             if (value == null || value.equals("null") || value.equals("\"[]\"")) return;
             try {
-                String cleaned = value.replaceAll("^\"|\"$", "");
-                if (cleaned.equals("[]")) return;
-                String inner = cleaned.replaceAll("^\\[|\\]$", "");
+                String inner = value.replaceAll("^\"|\"$", "").replaceAll("^\\[|\\]$", "");
+                if (inner.isEmpty()) return;
                 String[] parts = inner.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
                 for (String part : parts) {
                     String u = part.trim().replaceAll("^\"|\"$", "");
-                    if (!u.isEmpty() && !mediaUrls.contains(u)) {
-                        mediaUrls.add(u);
-                    }
+                    if (!u.isEmpty() && !mediaUrls.contains(u)) mediaUrls.add(u);
                 }
-                if (!mediaUrls.isEmpty()) {
-                    runOnUiThread(() -> updateMediaButton(true));
-                }
+                if (!mediaUrls.isEmpty()) runOnUiThread(() -> updateMediaButton(true));
             } catch (Exception e) { /* ignore */ }
         });
     }
@@ -295,7 +364,10 @@ public class MainActivity extends AppCompatActivity {
     private void setupButtons() {
         btnBack.setOnClickListener(v -> { if (webView.canGoBack()) webView.goBack(); });
         btnForward.setOnClickListener(v -> { if (webView.canGoForward()) webView.goForward(); });
-        btnRefresh.setOnClickListener(v -> webView.reload());
+        btnRefresh.setOnClickListener(v -> {
+            if (isHomePage) showHomePage();
+            else webView.reload();
+        });
         btnMedia.setOnClickListener(v -> showMediaDialog());
         swipeRefresh.setOnRefreshListener(() -> webView.reload());
     }
@@ -305,7 +377,6 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "לא נמצאו קישורי מדיה", Toast.LENGTH_SHORT).show();
             return;
         }
-
         String[] items = mediaUrls.toArray(new String[0]);
         StringBuilder allUrls = new StringBuilder();
         for (String u : mediaUrls) allUrls.append(u).append("\n");
@@ -346,21 +417,27 @@ public class MainActivity extends AppCompatActivity {
 
     private void loadUrl(String input) {
         input = input.trim();
+        isHomePage = false;
+        String url;
         if (input.startsWith("http://") || input.startsWith("https://")) {
-            webView.loadUrl(input);
+            url = input;
         } else if (input.contains(".") && !input.contains(" ")) {
-            webView.loadUrl("https://" + input);
+            url = "https://" + input;
         } else {
-            webView.loadUrl("https://duckduckgo.com/?q=" + Uri.encode(input));
+            url = "https://duckduckgo.com/?q=" + Uri.encode(input);
         }
+        webView.loadUrl(url);
     }
 
     @Override
     public void onBackPressed() {
-        if (webView.canGoBack()) {
-            webView.goBack();
-        } else {
-            super.onBackPressed();
-        }
+        if (webView.canGoBack()) webView.goBack();
+        else super.onBackPressed();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        executor.shutdown();
     }
 }
