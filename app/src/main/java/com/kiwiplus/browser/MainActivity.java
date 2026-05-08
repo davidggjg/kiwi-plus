@@ -16,9 +16,16 @@ import android.widget.*;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
+import org.torproject.android.service.OrbotHelper;
+import org.torproject.android.service.TorServiceConstants;
+
+import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
+
+import okhttp3.OkHttpClient;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -28,8 +35,11 @@ public class MainActivity extends AppCompatActivity {
     private ImageButton btnBack, btnForward, btnRefresh, btnMedia;
     private SwipeRefreshLayout swipeRefresh;
     private View splashScreen;
-    private TextView splashTitle, splashSubtitle;
+    private TextView splashTitle, splashSubtitle, torStatus;
     private List<String> mediaUrls = new ArrayList<>();
+    private boolean torReady = false;
+
+    private static final int TOR_SOCKS_PORT = 9050;
 
     private static final Pattern MEDIA_PATTERN = Pattern.compile(
         ".*\\.(mp4|m3u8|mp3|webm|ogg|avi|mkv|ts|flv|mov)(\\?.*)?$",
@@ -52,38 +62,69 @@ public class MainActivity extends AppCompatActivity {
         splashScreen = findViewById(R.id.splashScreen);
         splashTitle = findViewById(R.id.splashTitle);
         splashSubtitle = findViewById(R.id.splashSubtitle);
+        torStatus = findViewById(R.id.torStatus);
+
+        webView.setBackgroundColor(0xFF0f0f1e);
 
         showSplash();
         setupWebView();
         setupButtons();
         setupUrlBar();
+        startTor();
+    }
+
+    private void startTor() {
+        torStatus.setText("🔴 מתחבר ל-Tor...");
+
+        OrbotHelper orbotHelper = OrbotHelper.get(this);
+        orbotHelper.addStatusCallback(new OrbotHelper.SimpleStatusCallback() {
+            @Override
+            public void onEnabled(android.content.Intent statusIntent) {
+                runOnUiThread(() -> {
+                    torReady = true;
+                    torStatus.setText("🟢 Tor פעיל");
+
+                    // הגדר proxy על WebView דרך system properties
+                    System.setProperty("http.proxyHost", "127.0.0.1");
+                    System.setProperty("http.proxyPort", String.valueOf(TOR_SOCKS_PORT));
+                    System.setProperty("https.proxyHost", "127.0.0.1");
+                    System.setProperty("https.proxyPort", String.valueOf(TOR_SOCKS_PORT));
+                });
+            }
+
+            @Override
+            public void onStatusTimeout() {
+                runOnUiThread(() -> torStatus.setText("⚠️ Tor - timeout"));
+            }
+
+            @Override
+            public void onNotYetInstalled() {
+                runOnUiThread(() -> torStatus.setText("⚠️ ללא Tor"));
+            }
+        });
+
+        orbotHelper.init();
     }
 
     private void showSplash() {
         splashScreen.setVisibility(View.VISIBLE);
         webView.setVisibility(View.GONE);
 
-        // אנימציית כניסה
         AnimationSet anim = new AnimationSet(true);
-
         ScaleAnimation scale = new ScaleAnimation(
             0.5f, 1f, 0.5f, 1f,
             Animation.RELATIVE_TO_SELF, 0.5f,
             Animation.RELATIVE_TO_SELF, 0.5f
         );
         scale.setDuration(800);
-
         AlphaAnimation fade = new AlphaAnimation(0f, 1f);
         fade.setDuration(800);
-
         anim.addAnimation(scale);
         anim.addAnimation(fade);
-
         splashTitle.startAnimation(anim);
         splashSubtitle.startAnimation(fade);
 
-        // אחרי 2.5 שניות עובר לדפדפן
-        new Handler().postDelayed(() -> hideSplash(), 2500);
+        new Handler().postDelayed(this::hideSplash, 2500);
     }
 
     private void hideSplash() {
@@ -96,10 +137,38 @@ public class MainActivity extends AppCompatActivity {
             public void onAnimationEnd(Animation a) {
                 splashScreen.setVisibility(View.GONE);
                 webView.setVisibility(View.VISIBLE);
-                webView.loadUrl("about:blank");
+                showHomePage();
             }
         });
         splashScreen.startAnimation(fadeOut);
+    }
+
+    private void showHomePage() {
+        String html = "<!DOCTYPE html><html><head>" +
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
+            "<style>" +
+            "* { margin:0; padding:0; box-sizing:border-box; }" +
+            "body { background:#0f0f1e; display:flex; flex-direction:column;" +
+            "  align-items:center; justify-content:center; height:100vh;" +
+            "  font-family: sans-serif; color:#fff; }" +
+            "h1 { font-size:42px; color:#6c63ff; letter-spacing:4px; margin-bottom:8px; }" +
+            "p { color:#555; font-size:14px; letter-spacing:2px; }" +
+            ".dots { margin-top:40px; display:flex; gap:8px; }" +
+            ".dot { width:8px; height:8px; border-radius:50%; background:#6c63ff;" +
+            "  animation: pulse 1.4s infinite ease-in-out; }" +
+            ".dot:nth-child(2) { animation-delay:0.2s; }" +
+            ".dot:nth-child(3) { animation-delay:0.4s; }" +
+            "@keyframes pulse { 0%,80%,100%{transform:scale(0.6);opacity:0.4}" +
+            "  40%{transform:scale(1);opacity:1} }" +
+            "</style></head><body>" +
+            "<h1>KiwiPlus</h1>" +
+            "<p>browse free</p>" +
+            "<div class='dots'>" +
+            "  <div class='dot'></div><div class='dot'></div><div class='dot'></div>" +
+            "</div>" +
+            "</body></html>";
+
+        webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
     }
 
     private void setupWebView() {
@@ -126,6 +195,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                if (url.startsWith("data:")) return;
                 mediaUrls.clear();
                 updateMediaButton(false);
                 progressBar.setVisibility(View.VISIBLE);
@@ -134,6 +204,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                if (url.startsWith("data:")) return;
                 progressBar.setVisibility(View.GONE);
                 urlBar.setText(url);
                 btnBack.setAlpha(view.canGoBack() ? 1f : 0.4f);
@@ -188,14 +259,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void setupButtons() {
-        btnBack.setOnClickListener(v -> {
-            if (webView.canGoBack()) webView.goBack();
-        });
-
-        btnForward.setOnClickListener(v -> {
-            if (webView.canGoForward()) webView.goForward();
-        });
-
+        btnBack.setOnClickListener(v -> { if (webView.canGoBack()) webView.goBack(); });
+        btnForward.setOnClickListener(v -> { if (webView.canGoForward()) webView.goForward(); });
         btnRefresh.setOnClickListener(v -> webView.reload());
         btnMedia.setOnClickListener(v -> showMediaDialog());
         swipeRefresh.setOnRefreshListener(() -> webView.reload());
@@ -207,7 +272,6 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        // בניית רשימה להצגה
         String[] items = mediaUrls.toArray(new String[0]);
         StringBuilder allUrls = new StringBuilder();
         for (String u : mediaUrls) allUrls.append(u).append("\n");
