@@ -21,13 +21,13 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Gradle
+      - name: Create Gradle Wrapper
         run: |
-          apt-get install -y gradle 2>/dev/null || true
-          which gradle
+          gradle wrapper --gradle-version=8.2 --distribution-type=bin
+          chmod +x gradlew
 
       - name: Build APK
-        run: gradle assembleDebug
+        run: ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
