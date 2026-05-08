@@ -2,6 +2,7 @@ package com.kiwiplus.browser;
 
 import android.app.AlertDialog;
 import android.graphics.Bitmap;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.view.KeyEvent;
@@ -40,6 +41,8 @@ public class MainActivity extends AppCompatActivity {
         ".*(kaltura\\.com|cdnapisec\\.kaltura\\.com).*entry_id=([a-zA-Z0-9_]+).*",
         Pattern.CASE_INSENSITIVE
     );
+
+    private static final String HOME_URL = "https://kiwiplus.home";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -102,7 +105,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showHomePage() {
-        // דף בית עם HLS.js מובנה לניגון m3u8 ישירות
+        urlBar.setText("");
+        urlBar.setHint("חפש או הכנס כתובת");
         String html = "<!DOCTYPE html><html><head>" +
             "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
             "<style>" +
@@ -125,7 +129,7 @@ public class MainActivity extends AppCompatActivity {
             "<div class='dots'>" +
             "  <div class='dot'></div><div class='dot'></div><div class='dot'></div>" +
             "</div></body></html>";
-        webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
+        webView.loadDataWithBaseURL(HOME_URL, html, "text/html", "UTF-8", null);
     }
 
     private void setupWebView() {
@@ -139,7 +143,6 @@ public class MainActivity extends AppCompatActivity {
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setAllowFileAccess(true);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        // User agent נייד רגיל - בלי זכר לגוגל
         settings.setUserAgentString(
             "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
@@ -155,7 +158,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
-                if (url.startsWith("data:")) return;
+                if (url.startsWith("data:") || url.equals(HOME_URL)) return;
                 mediaUrls.clear();
                 updateMediaButton(false);
                 progressBar.setVisibility(View.VISIBLE);
@@ -164,14 +167,12 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                if (url.startsWith("data:")) return;
+                if (url.startsWith("data:") || url.equals(HOME_URL)) return;
                 progressBar.setVisibility(View.GONE);
                 urlBar.setText(url);
                 btnBack.setAlpha(view.canGoBack() ? 1f : 0.4f);
                 btnForward.setAlpha(view.canGoForward() ? 1f : 0.4f);
                 swipeRefresh.setRefreshing(false);
-
-                // הזרקת HLS.js + Video.js scanner
                 injectMediaScanner(view);
             }
 
@@ -188,7 +189,6 @@ public class MainActivity extends AppCompatActivity {
                 progressBar.setProgress(newProgress);
             }
 
-            // תמיכה במסך מלא
             private View customView;
             private CustomViewCallback customViewCallback;
 
@@ -216,7 +216,6 @@ public class MainActivity extends AppCompatActivity {
                     customViewCallback = null;
                 }
                 customView = null;
-                // re-init views after returning from fullscreen
                 recreate();
             }
         });
@@ -225,13 +224,11 @@ public class MainActivity extends AppCompatActivity {
     private void injectMediaScanner(WebView view) {
         String js =
             "(function() {" +
-            // סריקת video/audio רגיל
             "  var urls = [];" +
             "  document.querySelectorAll('video, audio, source').forEach(function(el) {" +
             "    if (el.src && el.src.startsWith('http')) urls.push(el.src);" +
             "    if (el.currentSrc && el.currentSrc.startsWith('http')) urls.push(el.currentSrc);" +
             "  });" +
-            // סריקת Video.js
             "  try {" +
             "    if (typeof videojs !== 'undefined') {" +
             "      var players = videojs.getPlayers();" +
@@ -242,24 +239,20 @@ public class MainActivity extends AppCompatActivity {
             "      }" +
             "    }" +
             "  } catch(e) {}" +
-            // סריקת Kaltura iframes
             "  document.querySelectorAll('iframe').forEach(function(el) {" +
             "    var src = el.src || '';" +
             "    if (src.indexOf('kaltura') !== -1 || src.indexOf('entry_id') !== -1) {" +
             "      urls.push(src);" +
             "    }" +
             "  });" +
-            // סריקת entry_id בקוד הדף
             "  var html = document.documentElement.innerHTML;" +
             "  var km = html.match(/entry_id[^a-zA-Z0-9_]*([a-zA-Z0-9_]{5,})/g);" +
             "  if (km) km.forEach(function(m) {" +
             "    var id = m.replace(/entry_id[^a-zA-Z0-9_]*/, '');" +
             "    urls.push('kaltura:entry_id=' + id);" +
             "  });" +
-            // סריקת m3u8 בתוך ה-HTML
             "  var m3u = html.match(/https?:[^'\"\\s]+\\.m3u8[^'\"\\s]*/g);" +
             "  if (m3u) m3u.forEach(function(u) { urls.push(u); });" +
-            // ייחוד
             "  var unique = urls.filter(function(v,i,a){ return v && a.indexOf(v)===i; });" +
             "  return JSON.stringify(unique);" +
             "})()";
@@ -352,16 +345,14 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void loadUrl(String input) {
-        String url;
+        input = input.trim();
         if (input.startsWith("http://") || input.startsWith("https://")) {
-            url = input;
+            webView.loadUrl(input);
         } else if (input.contains(".") && !input.contains(" ")) {
-            url = "https://" + input;
+            webView.loadUrl("https://" + input);
         } else {
-            // DuckDuckGo במקום גוגל
-            url = "https://duckduckgo.com/?q=" + input.replace(" ", "+");
+            webView.loadUrl("https://duckduckgo.com/?q=" + Uri.encode(input));
         }
-        webView.loadUrl(url);
     }
 
     @Override
