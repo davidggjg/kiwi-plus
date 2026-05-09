@@ -27,19 +27,25 @@ import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
+import java.io.IOException;
 import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
 
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.Dns;
+import okhttp3.HttpUrl;
+import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
-import okhttp3.Protocol;
 import okhttp3.Request;
+import okhttp3.RequestBody;
 import okhttp3.Response;
-import okhttp3.dnsoverhttps.DnsOverHttps;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -52,8 +58,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView splashTitle, splashSubtitle;
     private List<String> mediaUrls = new ArrayList<>();
     private boolean isHomePage = false;
-    private OkHttpClient dohClient;
-    private ExecutorService executor = Executors.newSingleThreadExecutor();
+    private OkHttpClient httpClient;
 
     private static final Pattern MEDIA_PATTERN = Pattern.compile(
         ".*\\.(mp4|m3u8|mp3|webm|ogg|avi|mkv|ts|flv|mov)(\\?.*)?$",
@@ -64,6 +69,54 @@ public class MainActivity extends AppCompatActivity {
         ".*(kaltura\\.com|cdnapisec\\.kaltura\\.com).*entry_id=([a-zA-Z0-9_]+).*",
         Pattern.CASE_INSENSITIVE
     );
+
+    // DoH DNS - שולח DNS דרך HTTPS לCloudflare
+    private static class DoHDns implements Dns {
+        private final OkHttpClient bootstrapClient;
+
+        DoHDns() {
+            bootstrapClient = new OkHttpClient.Builder().build();
+        }
+
+        @Override
+        public List<InetAddress> lookup(String hostname) throws UnknownHostException {
+            // ניסיון DoH דרך Cloudflare
+            try {
+                Request request = new Request.Builder()
+                    .url("https://1.1.1.1/dns-query?name=" + hostname + "&type=A")
+                    .header("Accept", "application/dns-json")
+                    .build();
+
+                Response response = bootstrapClient.newCall(request).execute();
+                if (response.body() != null) {
+                    String body = response.body().string();
+                    // פרסור פשוט של JSON
+                    List<InetAddress> addresses = parseDoHResponse(body);
+                    if (!addresses.isEmpty()) return addresses;
+                }
+            } catch (Exception e) {
+                // fallback ל-DNS רגיל
+            }
+            return Dns.SYSTEM.lookup(hostname);
+        }
+
+        private List<InetAddress> parseDoHResponse(String json) {
+            List<InetAddress> result = new ArrayList<>();
+            try {
+                // חיפוש כתובות IP ב-JSON
+                String[] parts = json.split("\"data\":\"");
+                for (int i = 1; i < parts.length; i++) {
+                    String ip = parts[i].split("\"")[0];
+                    if (ip.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) {
+                        result.add(InetAddress.getByName(ip));
+                    }
+                }
+            } catch (Exception e) {
+                // ignore
+            }
+            return result;
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -82,39 +135,16 @@ public class MainActivity extends AppCompatActivity {
         splashTitle = findViewById(R.id.splashTitle);
         splashSubtitle = findViewById(R.id.splashSubtitle);
 
+        // OkHttp עם DoH
+        httpClient = new OkHttpClient.Builder()
+            .dns(new DoHDns())
+            .build();
+
         webView.setBackgroundColor(0xFF0f0f1e);
-        setupDoH();
         showSplash();
         setupWebView();
         setupButtons();
         setupUrlBar();
-    }
-
-    private void setupDoH() {
-        // Cloudflare DoH - מוצפן, עוקף רימון
-        try {
-            OkHttpClient bootstrapClient = new OkHttpClient.Builder()
-                .protocols(Arrays.asList(Protocol.HTTP_2, Protocol.HTTP_1_1))
-                .build();
-
-            DnsOverHttps dns = new DnsOverHttps.Builder()
-                .client(bootstrapClient)
-                .url(okhttp3.HttpUrl.get("https://cloudflare-dns.com/dns-query"))
-                .bootstrapDnsHosts(Arrays.asList(
-                    InetAddress.getByName("1.1.1.1"),
-                    InetAddress.getByName("1.0.0.1")
-                ))
-                .includeIPv6(false)
-                .build();
-
-            dohClient = new OkHttpClient.Builder()
-                .dns(dns)
-                .protocols(Arrays.asList(Protocol.HTTP_2, Protocol.HTTP_1_1))
-                .build();
-
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
     }
 
     private void showSplash() {
@@ -202,36 +232,44 @@ public class MainActivity extends AppCompatActivity {
         );
 
         webView.setWebViewClient(new WebViewClient() {
-
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
                 checkForMedia(url);
 
-                // נתב דרך DoH client
-                if (dohClient != null && (url.startsWith("https://") || url.startsWith("http://"))) {
-                    try {
-                        okhttp3.Request.Builder reqBuilder = new okhttp3.Request.Builder().url(url);
-                        request.getRequestHeaders().forEach(reqBuilder::addHeader);
-                        Response response = dohClient.newCall(reqBuilder.build()).execute();
-                        if (response.body() != null) {
-                            String contentType = response.header("Content-Type", "text/plain");
-                            String mimeType = contentType != null && contentType.contains(";")
-                                ? contentType.split(";")[0].trim() : contentType;
-                            return new WebResourceResponse(
-                                mimeType,
-                                "UTF-8",
-                                response.code(),
-                                response.message().isEmpty() ? "OK" : response.message(),
-                                new java.util.HashMap<>(),
-                                response.body().byteStream()
-                            );
-                        }
-                    } catch (Exception e) {
-                        // fallback לwebview רגיל
+                if (!url.startsWith("http")) return null;
+
+                try {
+                    Request.Builder reqBuilder = new Request.Builder().url(url);
+                    for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
+                        try { reqBuilder.addHeader(header.getKey(), header.getValue()); } catch (Exception ignored) {}
                     }
+                    if (!request.getMethod().equals("GET")) return null;
+
+                    Response response = httpClient.newCall(reqBuilder.build()).execute();
+                    if (response.body() == null) return null;
+
+                    String contentType = response.header("Content-Type", "text/plain");
+                    String mimeType = contentType != null && contentType.contains(";")
+                        ? contentType.split(";")[0].trim() : contentType;
+
+                    HashMap<String, String> headers = new HashMap<>();
+                    for (String name : response.headers().names()) {
+                        headers.put(name, response.header(name));
+                    }
+
+                    String message = response.message();
+                    if (message == null || message.isEmpty()) message = "OK";
+
+                    return new WebResourceResponse(
+                        mimeType, "UTF-8",
+                        response.code(), message,
+                        headers,
+                        response.body().byteStream()
+                    );
+                } catch (Exception e) {
+                    return null;
                 }
-                return super.shouldInterceptRequest(view, request);
             }
 
             @Override
@@ -245,10 +283,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                if (isHomePage) {
-                    isHomePage = false;
-                    return;
-                }
+                if (isHomePage) { isHomePage = false; return; }
                 progressBar.setVisibility(View.GONE);
                 urlBar.setText(url);
                 btnBack.setAlpha(view.canGoBack() ? 1f : 0.4f);
@@ -275,7 +310,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onShowCustomView(View view, CustomViewCallback callback) {
-                if (customView != null) { callback.getClass(); return; }
+                if (customView != null) { callback.onCustomViewHidden(); return; }
                 customView = view;
                 customViewCallback = callback;
                 getWindow().getDecorView().setSystemUiVisibility(
@@ -433,11 +468,5 @@ public class MainActivity extends AppCompatActivity {
     public void onBackPressed() {
         if (webView.canGoBack()) webView.goBack();
         else super.onBackPressed();
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        executor.shutdown();
     }
 }
