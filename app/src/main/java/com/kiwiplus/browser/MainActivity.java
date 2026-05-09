@@ -86,7 +86,7 @@ public class MainActivity extends AppCompatActivity {
 
         connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
 
-        webView.setBackgroundColor(0xFF0f0f1e);
+        webView.setBackgroundColor(0xFFf0f7ee);
         requestCellularNetwork();
         showSplash();
         setupWebView();
@@ -164,31 +164,90 @@ public class MainActivity extends AppCompatActivity {
         isHomePage = true;
         urlBar.setText("");
         urlBar.setHint("חפש או הכנס כתובת");
-        String html = "<!DOCTYPE html><html><head>" +
+
+        String html = "<!DOCTYPE html><html dir='rtl'><head>" +
             "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
             "<style>" +
-            "* { margin:0; padding:0; box-sizing:border-box; }" +
-            "body { background:#0f0f1e; display:flex; flex-direction:column;" +
-            "  align-items:center; justify-content:center; height:100vh;" +
-            "  font-family: sans-serif; color:#fff; }" +
-            "h1 { font-size:42px; color:#6c63ff; letter-spacing:4px; margin-bottom:8px; }" +
-            "p { color:#555; font-size:14px; letter-spacing:2px; }" +
-            ".badge { margin-top:16px; background:#1a1a3e; border:1px solid #6c63ff;" +
-            "  padding:6px 16px; border-radius:20px; font-size:12px; color:#6c63ff; }" +
-            ".dots { margin-top:32px; display:flex; gap:8px; }" +
-            ".dot { width:8px; height:8px; border-radius:50%; background:#6c63ff;" +
-            "  animation: pulse 1.4s infinite ease-in-out; }" +
-            ".dot:nth-child(2) { animation-delay:0.2s; }" +
-            ".dot:nth-child(3) { animation-delay:0.4s; }" +
-            "@keyframes pulse { 0%,80%,100%{transform:scale(0.6);opacity:0.4}" +
-            "  40%{transform:scale(1);opacity:1} }" +
+            "* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }" +
+            "body { background:linear-gradient(160deg,#e8f5e0 0%,#f5faf0 60%,#e0f0e8 100%);" +
+            "  font-family: sans-serif; color:#2d4a1e; min-height:100vh; padding:24px 16px; }" +
+            "h1 { font-size:38px; font-weight:900; color:#3a7d1e; letter-spacing:-1px; margin-bottom:4px; }" +
+            "h1 span { color:#2d4a1e; }" +
+            ".subtitle { font-size:13px; color:#7aaa5a; margin-bottom:28px; }" +
+            ".section-title { font-size:18px; font-weight:700; margin-bottom:14px; color:#2d4a1e; }" +
+            ".quick-links { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:28px; }" +
+            ".quick-link { display:flex; flex-direction:column; align-items:center; gap:6px;" +
+            "  cursor:pointer; }" +
+            ".quick-link .icon { width:56px; height:56px; border-radius:50%;" +
+            "  background:white; display:flex; align-items:center; justify-content:center;" +
+            "  font-size:24px; box-shadow:0 2px 8px rgba(0,0,0,0.08); }" +
+            ".quick-link .label { font-size:11px; color:#4a7a2e; font-weight:500; text-align:center; }" +
+            ".card { background:white; border-radius:16px; padding:16px;" +
+            "  box-shadow:0 2px 12px rgba(0,0,0,0.06); margin-bottom:16px; }" +
+            ".card-row { display:flex; align-items:center; gap:12px; }" +
+            ".card-icon { width:44px; height:44px; border-radius:12px;" +
+            "  background:#e8f5e0; display:flex; align-items:center; justify-content:center;" +
+            "  font-size:22px; flex-shrink:0; }" +
+            ".card-text h3 { font-size:14px; font-weight:700; color:#2d4a1e; }" +
+            ".card-text p { font-size:12px; color:#7aaa5a; margin-top:2px; }" +
+            ".badge { display:inline-block; background:#e8f5e0; color:#3a7d1e;" +
+            "  padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600;" +
+            "  margin-top:6px; }" +
+            "a { text-decoration:none; color:inherit; }" +
             "</style></head><body>" +
-            "<h1>KiwiPlus</h1>" +
-            "<p>browse free</p>" +
-            "<div class='badge'>📡 עוקף חסימות אוטומטית</div>" +
-            "<div class='dots'>" +
-            "  <div class='dot'></div><div class='dot'></div><div class='dot'></div>" +
-            "</div></body></html>";
+
+            "<h1>Kiwi<span>Plus</span> 🥝</h1>" +
+            "<p class='subtitle'>browse free · DNS מוצפן פעיל 🔒</p>" +
+
+            "<p class='section-title'>קישורים מהירים</p>" +
+            "<div class='quick-links'>" +
+            "  <a class='quick-link' onclick=\"navigate('https://github.com')\">" +
+            "    <div class='icon'>🐙</div><div class='label'>GitHub</div></a>" +
+            "  <a class='quick-link' onclick=\"navigate('https://youtube.com')\">" +
+            "    <div class='icon'>▶️</div><div class='label'>YouTube</div></a>" +
+            "  <a class='quick-link' onclick=\"navigate('https://twitter.com')\">" +
+            "    <div class='icon'>🐦</div><div class='label'>Twitter</div></a>" +
+            "  <a class='quick-link' onclick=\"navigate('https://reddit.com')\">" +
+            "    <div class='icon'>🤖</div><div class='label'>Reddit</div></a>" +
+            "  <a class='quick-link' onclick=\"navigate('https://instagram.com')\">" +
+            "    <div class='icon'>📸</div><div class='label'>Instagram</div></a>" +
+            "  <a class='quick-link' onclick=\"navigate('https://whatsapp.com')\">" +
+            "    <div class='icon'>💬</div><div class='label'>WhatsApp</div></a>" +
+            "  <a class='quick-link' onclick=\"navigate('https://google.com')\">" +
+            "    <div class='icon'>🔍</div><div class='label'>Google</div></a>" +
+            "  <a class='quick-link' onclick=\"navigate('https://telegram.org')\">" +
+            "    <div class='icon'>✈️</div><div class='label'>Telegram</div></a>" +
+            "</div>" +
+
+            "<p class='section-title'>Daily Focus</p>" +
+            "<div class='card'>" +
+            "  <div class='card-row'>" +
+            "    <div class='card-icon'>📡</div>" +
+            "    <div class='card-text'>" +
+            "      <h3>חיבור מאובטח</h3>" +
+            "      <p>כל הגלישה מוצפנת ועוקפת חסימות</p>" +
+            "      <span class='badge'>🟢 פעיל</span>" +
+            "    </div>" +
+            "  </div>" +
+            "</div>" +
+            "<div class='card'>" +
+            "  <div class='card-row'>" +
+            "    <div class='card-icon'>🎬</div>" +
+            "    <div class='card-text'>" +
+            "      <h3>זיהוי מדיה</h3>" +
+            "      <p>לחץ על ▶ בסרגל לזיהוי קישורי וידאו</p>" +
+            "      <span class='badge'>Kaltura · HLS · Video.js</span>" +
+            "    </div>" +
+            "  </div>" +
+            "</div>" +
+
+            "<script>" +
+            "function navigate(url) {" +
+            "  window.location.href = url;" +
+            "}" +
+            "</script>" +
+            "</body></html>";
+
         webView.loadData(html, "text/html; charset=utf-8", "UTF-8");
     }
 
@@ -214,7 +273,6 @@ public class MainActivity extends AppCompatActivity {
                 String url = request.getUrl().toString();
                 checkForMedia(url);
 
-                // אם על WiFi ויש לנו cellular - נשתמש ב-4G
                 if (isOnWifi() && cellularClient != null && request.getMethod().equals("GET")) {
                     try {
                         Request.Builder reqBuilder = new Request.Builder().url(url);
