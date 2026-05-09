@@ -1,7 +1,12 @@
 package com.kiwiplus.browser;
 
 import android.app.AlertDialog;
+import android.content.Context;
 import android.graphics.Bitmap;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -27,24 +32,13 @@ import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
-import java.io.IOException;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.regex.Pattern;
 
-import okhttp3.Call;
-import okhttp3.Callback;
-import okhttp3.Dns;
-import okhttp3.HttpUrl;
-import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
-import okhttp3.RequestBody;
 import okhttp3.Response;
 
 public class MainActivity extends AppCompatActivity {
@@ -58,7 +52,10 @@ public class MainActivity extends AppCompatActivity {
     private TextView splashTitle, splashSubtitle;
     private List<String> mediaUrls = new ArrayList<>();
     private boolean isHomePage = false;
-    private OkHttpClient httpClient;
+
+    private ConnectivityManager connectivityManager;
+    private Network cellularNetwork = null;
+    private OkHttpClient cellularClient = null;
 
     private static final Pattern MEDIA_PATTERN = Pattern.compile(
         ".*\\.(mp4|m3u8|mp3|webm|ogg|avi|mkv|ts|flv|mov)(\\?.*)?$",
@@ -69,54 +66,6 @@ public class MainActivity extends AppCompatActivity {
         ".*(kaltura\\.com|cdnapisec\\.kaltura\\.com).*entry_id=([a-zA-Z0-9_]+).*",
         Pattern.CASE_INSENSITIVE
     );
-
-    // DoH DNS - שולח DNS דרך HTTPS לCloudflare
-    private static class DoHDns implements Dns {
-        private final OkHttpClient bootstrapClient;
-
-        DoHDns() {
-            bootstrapClient = new OkHttpClient.Builder().build();
-        }
-
-        @Override
-        public List<InetAddress> lookup(String hostname) throws UnknownHostException {
-            // ניסיון DoH דרך Cloudflare
-            try {
-                Request request = new Request.Builder()
-                    .url("https://1.1.1.1/dns-query?name=" + hostname + "&type=A")
-                    .header("Accept", "application/dns-json")
-                    .build();
-
-                Response response = bootstrapClient.newCall(request).execute();
-                if (response.body() != null) {
-                    String body = response.body().string();
-                    // פרסור פשוט של JSON
-                    List<InetAddress> addresses = parseDoHResponse(body);
-                    if (!addresses.isEmpty()) return addresses;
-                }
-            } catch (Exception e) {
-                // fallback ל-DNS רגיל
-            }
-            return Dns.SYSTEM.lookup(hostname);
-        }
-
-        private List<InetAddress> parseDoHResponse(String json) {
-            List<InetAddress> result = new ArrayList<>();
-            try {
-                // חיפוש כתובות IP ב-JSON
-                String[] parts = json.split("\"data\":\"");
-                for (int i = 1; i < parts.length; i++) {
-                    String ip = parts[i].split("\"")[0];
-                    if (ip.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) {
-                        result.add(InetAddress.getByName(ip));
-                    }
-                }
-            } catch (Exception e) {
-                // ignore
-            }
-            return result;
-        }
-    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -135,16 +84,44 @@ public class MainActivity extends AppCompatActivity {
         splashTitle = findViewById(R.id.splashTitle);
         splashSubtitle = findViewById(R.id.splashSubtitle);
 
-        // OkHttp עם DoH
-        httpClient = new OkHttpClient.Builder()
-            .dns(new DoHDns())
-            .build();
+        connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
 
         webView.setBackgroundColor(0xFF0f0f1e);
+        requestCellularNetwork();
         showSplash();
         setupWebView();
         setupButtons();
         setupUrlBar();
+    }
+
+    private void requestCellularNetwork() {
+        NetworkRequest request = new NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build();
+
+        connectivityManager.requestNetwork(request, new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                cellularNetwork = network;
+                cellularClient = new OkHttpClient.Builder()
+                    .socketFactory(network.getSocketFactory())
+                    .build();
+            }
+
+            @Override
+            public void onLost(Network network) {
+                cellularNetwork = null;
+                cellularClient = null;
+            }
+        });
+    }
+
+    private boolean isOnWifi() {
+        Network active = connectivityManager.getActiveNetwork();
+        if (active == null) return false;
+        NetworkCapabilities caps = connectivityManager.getNetworkCapabilities(active);
+        return caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI);
     }
 
     private void showSplash() {
@@ -208,7 +185,7 @@ public class MainActivity extends AppCompatActivity {
             "</style></head><body>" +
             "<h1>KiwiPlus</h1>" +
             "<p>browse free</p>" +
-            "<div class='badge'>🔒 DNS מוצפן פעיל</div>" +
+            "<div class='badge'>📡 עוקף חסימות אוטומטית</div>" +
             "<div class='dots'>" +
             "  <div class='dot'></div><div class='dot'></div><div class='dot'></div>" +
             "</div></body></html>";
@@ -237,39 +214,41 @@ public class MainActivity extends AppCompatActivity {
                 String url = request.getUrl().toString();
                 checkForMedia(url);
 
-                if (!url.startsWith("http")) return null;
+                // אם על WiFi ויש לנו cellular - נשתמש ב-4G
+                if (isOnWifi() && cellularClient != null && request.getMethod().equals("GET")) {
+                    try {
+                        Request.Builder reqBuilder = new Request.Builder().url(url);
+                        for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
+                            try { reqBuilder.addHeader(header.getKey(), header.getValue()); } catch (Exception ignored) {}
+                        }
 
-                try {
-                    Request.Builder reqBuilder = new Request.Builder().url(url);
-                    for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
-                        try { reqBuilder.addHeader(header.getKey(), header.getValue()); } catch (Exception ignored) {}
+                        Response response = cellularClient.newCall(reqBuilder.build()).execute();
+                        if (response.body() == null) return null;
+
+                        String contentType = response.header("Content-Type", "text/plain");
+                        String mimeType = contentType != null && contentType.contains(";")
+                            ? contentType.split(";")[0].trim() : contentType;
+
+                        HashMap<String, String> headers = new HashMap<>();
+                        for (String name : response.headers().names()) {
+                            String val = response.header(name);
+                            if (val != null) headers.put(name, val);
+                        }
+
+                        String message = response.message();
+                        if (message == null || message.isEmpty()) message = "OK";
+
+                        return new WebResourceResponse(
+                            mimeType, "UTF-8",
+                            response.code(), message,
+                            headers,
+                            response.body().byteStream()
+                        );
+                    } catch (Exception e) {
+                        return null;
                     }
-                    if (!request.getMethod().equals("GET")) return null;
-
-                    Response response = httpClient.newCall(reqBuilder.build()).execute();
-                    if (response.body() == null) return null;
-
-                    String contentType = response.header("Content-Type", "text/plain");
-                    String mimeType = contentType != null && contentType.contains(";")
-                        ? contentType.split(";")[0].trim() : contentType;
-
-                    HashMap<String, String> headers = new HashMap<>();
-                    for (String name : response.headers().names()) {
-                        headers.put(name, response.header(name));
-                    }
-
-                    String message = response.message();
-                    if (message == null || message.isEmpty()) message = "OK";
-
-                    return new WebResourceResponse(
-                        mimeType, "UTF-8",
-                        response.code(), message,
-                        headers,
-                        response.body().byteStream()
-                    );
-                } catch (Exception e) {
-                    return null;
                 }
+                return null;
             }
 
             @Override
