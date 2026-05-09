@@ -67,6 +67,8 @@ public class MainActivity extends AppCompatActivity {
         Pattern.CASE_INSENSITIVE
     );
 
+    private static final String HOME_BASE = "https://kiwiplus.local";
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -170,85 +172,51 @@ public class MainActivity extends AppCompatActivity {
             "<style>" +
             "* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }" +
             "body { background:linear-gradient(160deg,#e8f5e0 0%,#f5faf0 60%,#e0f0e8 100%);" +
-            "  font-family: sans-serif; color:#2d4a1e; min-height:100vh; padding:24px 16px; }" +
-            "h1 { font-size:38px; font-weight:900; color:#3a7d1e; letter-spacing:-1px; margin-bottom:4px; }" +
-            "h1 span { color:#2d4a1e; }" +
-            ".subtitle { font-size:13px; color:#7aaa5a; margin-bottom:28px; }" +
-            ".section-title { font-size:18px; font-weight:700; margin-bottom:14px; color:#2d4a1e; }" +
-            ".quick-links { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:28px; }" +
-            ".quick-link { display:flex; flex-direction:column; align-items:center; gap:6px;" +
-            "  cursor:pointer; }" +
-            ".quick-link .icon { width:56px; height:56px; border-radius:50%;" +
-            "  background:white; display:flex; align-items:center; justify-content:center;" +
-            "  font-size:24px; box-shadow:0 2px 8px rgba(0,0,0,0.08); }" +
-            ".quick-link .label { font-size:11px; color:#4a7a2e; font-weight:500; text-align:center; }" +
-            ".card { background:white; border-radius:16px; padding:16px;" +
-            "  box-shadow:0 2px 12px rgba(0,0,0,0.06); margin-bottom:16px; }" +
-            ".card-row { display:flex; align-items:center; gap:12px; }" +
-            ".card-icon { width:44px; height:44px; border-radius:12px;" +
-            "  background:#e8f5e0; display:flex; align-items:center; justify-content:center;" +
-            "  font-size:22px; flex-shrink:0; }" +
-            ".card-text h3 { font-size:14px; font-weight:700; color:#2d4a1e; }" +
-            ".card-text p { font-size:12px; color:#7aaa5a; margin-top:2px; }" +
+            "  font-family:sans-serif; color:#2d4a1e; min-height:100vh; padding:24px 16px 100px; }" +
+            "h1 { font-size:36px; font-weight:900; color:#3a7d1e; margin-bottom:2px; }" +
+            ".subtitle { font-size:12px; color:#7aaa5a; margin-bottom:24px; }" +
+            ".section-title { font-size:17px; font-weight:700; margin:20px 0 12px; color:#2d4a1e; }" +
+            ".grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:8px; }" +
+            ".item { display:flex; flex-direction:column; align-items:center; gap:5px; cursor:pointer; }" +
+            ".item .icon { width:54px; height:54px; border-radius:50%; background:white;" +
+            "  display:flex; align-items:center; justify-content:center; font-size:22px;" +
+            "  box-shadow:0 2px 8px rgba(0,0,0,0.09); }" +
+            ".item .label { font-size:10px; color:#4a7a2e; font-weight:600; text-align:center; }" +
+            ".card { background:white; border-radius:16px; padding:14px;" +
+            "  box-shadow:0 2px 10px rgba(0,0,0,0.06); margin-bottom:12px; }" +
+            ".row { display:flex; align-items:center; gap:12px; }" +
+            ".cicon { width:42px; height:42px; border-radius:12px; background:#e8f5e0;" +
+            "  display:flex; align-items:center; justify-content:center; font-size:20px; flex-shrink:0; }" +
+            ".ctext h3 { font-size:13px; font-weight:700; color:#2d4a1e; }" +
+            ".ctext p { font-size:11px; color:#7aaa5a; margin-top:2px; }" +
             ".badge { display:inline-block; background:#e8f5e0; color:#3a7d1e;" +
-            "  padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600;" +
-            "  margin-top:6px; }" +
-            "a { text-decoration:none; color:inherit; }" +
+            "  padding:2px 8px; border-radius:20px; font-size:10px; font-weight:700; margin-top:4px; }" +
+            ".item:active .icon { transform:scale(0.92); }" +
             "</style></head><body>" +
-
-            "<h1>Kiwi<span>Plus</span> 🥝</h1>" +
-            "<p class='subtitle'>browse free · DNS מוצפן פעיל 🔒</p>" +
-
+            "<h1>KiwiPlus 🥝</h1>" +
+            "<p class='subtitle'>browse free · 🔒 מוצפן · 📡 עוקף חסימות</p>" +
             "<p class='section-title'>קישורים מהירים</p>" +
-            "<div class='quick-links'>" +
-            "  <a class='quick-link' onclick=\"navigate('https://github.com')\">" +
-            "    <div class='icon'>🐙</div><div class='label'>GitHub</div></a>" +
-            "  <a class='quick-link' onclick=\"navigate('https://youtube.com')\">" +
-            "    <div class='icon'>▶️</div><div class='label'>YouTube</div></a>" +
-            "  <a class='quick-link' onclick=\"navigate('https://twitter.com')\">" +
-            "    <div class='icon'>🐦</div><div class='label'>Twitter</div></a>" +
-            "  <a class='quick-link' onclick=\"navigate('https://reddit.com')\">" +
-            "    <div class='icon'>🤖</div><div class='label'>Reddit</div></a>" +
-            "  <a class='quick-link' onclick=\"navigate('https://instagram.com')\">" +
-            "    <div class='icon'>📸</div><div class='label'>Instagram</div></a>" +
-            "  <a class='quick-link' onclick=\"navigate('https://whatsapp.com')\">" +
-            "    <div class='icon'>💬</div><div class='label'>WhatsApp</div></a>" +
-            "  <a class='quick-link' onclick=\"navigate('https://google.com')\">" +
-            "    <div class='icon'>🔍</div><div class='label'>Google</div></a>" +
-            "  <a class='quick-link' onclick=\"navigate('https://telegram.org')\">" +
-            "    <div class='icon'>✈️</div><div class='label'>Telegram</div></a>" +
+            "<div class='grid'>" +
+            "<div class='item' onclick=\"go('https://github.com')\"><div class='icon'>🐙</div><div class='label'>GitHub</div></div>" +
+            "<div class='item' onclick=\"go('https://youtube.com')\"><div class='icon'>▶️</div><div class='label'>YouTube</div></div>" +
+            "<div class='item' onclick=\"go('https://twitter.com')\"><div class='icon'>🐦</div><div class='label'>Twitter</div></div>" +
+            "<div class='item' onclick=\"go('https://reddit.com')\"><div class='icon'>🤖</div><div class='label'>Reddit</div></div>" +
+            "<div class='item' onclick=\"go('https://instagram.com')\"><div class='icon'>📸</div><div class='label'>Instagram</div></div>" +
+            "<div class='item' onclick=\"go('https://web.whatsapp.com')\"><div class='icon'>💬</div><div class='label'>WhatsApp</div></div>" +
+            "<div class='item' onclick=\"go('https://duckduckgo.com')\"><div class='icon'>🔍</div><div class='label'>DuckDuckGo</div></div>" +
+            "<div class='item' onclick=\"go('https://telegram.org')\"><div class='icon'>✈️</div><div class='label'>Telegram</div></div>" +
             "</div>" +
-
-            "<p class='section-title'>Daily Focus</p>" +
-            "<div class='card'>" +
-            "  <div class='card-row'>" +
-            "    <div class='card-icon'>📡</div>" +
-            "    <div class='card-text'>" +
-            "      <h3>חיבור מאובטח</h3>" +
-            "      <p>כל הגלישה מוצפנת ועוקפת חסימות</p>" +
-            "      <span class='badge'>🟢 פעיל</span>" +
-            "    </div>" +
-            "  </div>" +
-            "</div>" +
-            "<div class='card'>" +
-            "  <div class='card-row'>" +
-            "    <div class='card-icon'>🎬</div>" +
-            "    <div class='card-text'>" +
-            "      <h3>זיהוי מדיה</h3>" +
-            "      <p>לחץ על ▶ בסרגל לזיהוי קישורי וידאו</p>" +
-            "      <span class='badge'>Kaltura · HLS · Video.js</span>" +
-            "    </div>" +
-            "  </div>" +
-            "</div>" +
-
-            "<script>" +
-            "function navigate(url) {" +
-            "  window.location.href = url;" +
-            "}" +
-            "</script>" +
+            "<p class='section-title'>מצב</p>" +
+            "<div class='card'><div class='row'><div class='cicon'>📡</div><div class='ctext'>" +
+            "<h3>עוקף חסימות</h3><p>גולש דרך 4G כשהWiFi חוסם</p>" +
+            "<span class='badge'>🟢 פעיל</span></div></div></div>" +
+            "<div class='card'><div class='row'><div class='cicon'>🎬</div><div class='ctext'>" +
+            "<h3>זיהוי מדיה</h3><p>לחץ ▶ לזיהוי קישורי וידאו אוטומטי</p>" +
+            "<span class='badge'>HLS · Kaltura · Video.js</span></div></div></div>" +
+            "<script>function go(url){ window.location.href=url; }</script>" +
             "</body></html>";
 
-        webView.loadData(html, "text/html; charset=utf-8", "UTF-8");
+        webView.loadDataWithBaseURL(HOME_BASE, html, "text/html", "UTF-8", null);
     }
 
     private void setupWebView() {
@@ -273,13 +241,14 @@ public class MainActivity extends AppCompatActivity {
                 String url = request.getUrl().toString();
                 checkForMedia(url);
 
+                if (url.startsWith(HOME_BASE)) return null;
+
                 if (isOnWifi() && cellularClient != null && request.getMethod().equals("GET")) {
                     try {
                         Request.Builder reqBuilder = new Request.Builder().url(url);
                         for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
                             try { reqBuilder.addHeader(header.getKey(), header.getValue()); } catch (Exception ignored) {}
                         }
-
                         Response response = cellularClient.newCall(reqBuilder.build()).execute();
                         if (response.body() == null) return null;
 
@@ -311,7 +280,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
-                if (isHomePage) return;
+                if (isHomePage || url.startsWith(HOME_BASE)) return;
                 mediaUrls.clear();
                 updateMediaButton(false);
                 progressBar.setVisibility(View.VISIBLE);
@@ -320,6 +289,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                if (url.startsWith(HOME_BASE)) { isHomePage = false; return; }
                 if (isHomePage) { isHomePage = false; return; }
                 progressBar.setVisibility(View.GONE);
                 urlBar.setText(url);
@@ -372,20 +342,26 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void injectMediaScanner(WebView view) {
+        // מזריק hls.js לדף כדי לזהות m3u8 גם מVideo.js
         String js =
             "(function() {" +
             "  var urls = [];" +
             "  document.querySelectorAll('video, audio, source').forEach(function(el) {" +
             "    if (el.src && el.src.startsWith('http')) urls.push(el.src);" +
             "    if (el.currentSrc && el.currentSrc.startsWith('http')) urls.push(el.currentSrc);" +
+            "    if (el.getAttribute && el.getAttribute('src')) urls.push(el.getAttribute('src'));" +
             "  });" +
             "  try {" +
             "    if (typeof videojs !== 'undefined') {" +
             "      var players = videojs.getPlayers();" +
             "      for (var id in players) {" +
             "        var p = players[id];" +
-            "        try { var s = p.currentSrc(); if(s) urls.push(s); } catch(e){}" +
-            "        try { var s2 = p.src(); if(s2) urls.push(s2); } catch(e){}" +
+            "        try { var s = p.currentSrc(); if(s && s.startsWith('http')) urls.push(s); } catch(e){}" +
+            "        try { var s2 = p.src(); if(s2 && s2.startsWith('http')) urls.push(s2); } catch(e){}" +
+            "        try {" +
+            "          var tech = p.tech({IWillNotUseThisInPlugins:true});" +
+            "          if(tech && tech.src_) urls.push(tech.src_);" +
+            "        } catch(e){}" +
             "      }" +
             "    }" +
             "  } catch(e) {}" +
@@ -398,7 +374,7 @@ public class MainActivity extends AppCompatActivity {
             "  if (km) km.forEach(function(m) {" +
             "    urls.push('kaltura:entry_id=' + m.replace(/entry_id[^a-zA-Z0-9_]*/, ''));" +
             "  });" +
-            "  var m3u = html.match(/https?:[^'\"\\s]+\\.m3u8[^'\"\\s]*/g);" +
+            "  var m3u = html.match(/https?:[^'\"\\s\\\\]+\\.m3u8[^'\"\\s\\\\]*/g);" +
             "  if (m3u) m3u.forEach(function(u) { urls.push(u); });" +
             "  return JSON.stringify(urls.filter(function(v,i,a){ return v && a.indexOf(v)===i; }));" +
             "})()";
