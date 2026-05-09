@@ -6,7 +6,6 @@ import android.graphics.Bitmap;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
-import android.net.NetworkRequest;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -46,16 +45,24 @@ public class MainActivity extends AppCompatActivity {
     private WebView webView;
     private EditText urlBar;
     private ProgressBar progressBar;
-    private ImageButton btnBack, btnForward, btnRefresh, btnMedia;
+    private ImageButton btnBack, btnForward, btnRefresh, btnMedia, btnHome, btnDesktop;
     private SwipeRefreshLayout swipeRefresh;
     private View splashScreen;
     private TextView splashTitle, splashSubtitle;
     private List<String> mediaUrls = new ArrayList<>();
     private boolean isHomePage = false;
+    private boolean isDesktopMode = false;
 
-    private ConnectivityManager connectivityManager;
-    private Network cellularNetwork = null;
-    private OkHttpClient cellularClient = null;
+    // שרת הפרוקסי שלנו
+    private static final String PROXY_URL = "https://kiwiplus-proxy.onrender.com/";
+
+    private static final String UA_MOBILE =
+        "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
+
+    private static final String UA_DESKTOP =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
     private static final Pattern MEDIA_PATTERN = Pattern.compile(
         ".*\\.(mp4|m3u8|mp3|webm|ogg|avi|mkv|ts|flv|mov)(\\?.*)?$",
@@ -69,6 +76,8 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String HOME_BASE = "https://kiwiplus.local";
 
+    private OkHttpClient proxyClient;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -81,61 +90,31 @@ public class MainActivity extends AppCompatActivity {
         btnForward = findViewById(R.id.btnForward);
         btnRefresh = findViewById(R.id.btnRefresh);
         btnMedia = findViewById(R.id.btnMedia);
+        btnHome = findViewById(R.id.btnHome);
+        btnDesktop = findViewById(R.id.btnDesktop);
         swipeRefresh = findViewById(R.id.swipeRefresh);
         splashScreen = findViewById(R.id.splashScreen);
         splashTitle = findViewById(R.id.splashTitle);
         splashSubtitle = findViewById(R.id.splashSubtitle);
 
-        connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        proxyClient = new OkHttpClient.Builder()
+            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .build();
 
         webView.setBackgroundColor(0xFFf0f7ee);
-        requestCellularNetwork();
         showSplash();
         setupWebView();
         setupButtons();
         setupUrlBar();
     }
 
-    private void requestCellularNetwork() {
-        NetworkRequest request = new NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build();
-
-        connectivityManager.requestNetwork(request, new ConnectivityManager.NetworkCallback() {
-            @Override
-            public void onAvailable(Network network) {
-                cellularNetwork = network;
-                cellularClient = new OkHttpClient.Builder()
-                    .socketFactory(network.getSocketFactory())
-                    .build();
-            }
-
-            @Override
-            public void onLost(Network network) {
-                cellularNetwork = null;
-                cellularClient = null;
-            }
-        });
-    }
-
-    private boolean isOnWifi() {
-        Network active = connectivityManager.getActiveNetwork();
-        if (active == null) return false;
-        NetworkCapabilities caps = connectivityManager.getNetworkCapabilities(active);
-        return caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI);
-    }
-
     private void showSplash() {
         splashScreen.setVisibility(View.VISIBLE);
         webView.setVisibility(View.GONE);
-
         AnimationSet anim = new AnimationSet(true);
-        ScaleAnimation scale = new ScaleAnimation(
-            0.5f, 1f, 0.5f, 1f,
-            Animation.RELATIVE_TO_SELF, 0.5f,
-            Animation.RELATIVE_TO_SELF, 0.5f
-        );
+        ScaleAnimation scale = new ScaleAnimation(0.5f, 1f, 0.5f, 1f,
+            Animation.RELATIVE_TO_SELF, 0.5f, Animation.RELATIVE_TO_SELF, 0.5f);
         scale.setDuration(800);
         AlphaAnimation fade = new AlphaAnimation(0f, 1f);
         fade.setDuration(800);
@@ -152,8 +131,7 @@ public class MainActivity extends AppCompatActivity {
         fadeOut.setAnimationListener(new Animation.AnimationListener() {
             @Override public void onAnimationStart(Animation a) {}
             @Override public void onAnimationRepeat(Animation a) {}
-            @Override
-            public void onAnimationEnd(Animation a) {
+            @Override public void onAnimationEnd(Animation a) {
                 splashScreen.setVisibility(View.GONE);
                 webView.setVisibility(View.VISIBLE);
                 showHomePage();
@@ -166,7 +144,6 @@ public class MainActivity extends AppCompatActivity {
         isHomePage = true;
         urlBar.setText("");
         urlBar.setHint("חפש או הכנס כתובת");
-
         String html = "<!DOCTYPE html><html dir='rtl'><head>" +
             "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
             "<style>" +
@@ -180,7 +157,8 @@ public class MainActivity extends AppCompatActivity {
             ".item { display:flex; flex-direction:column; align-items:center; gap:5px; cursor:pointer; }" +
             ".item .icon { width:54px; height:54px; border-radius:50%; background:white;" +
             "  display:flex; align-items:center; justify-content:center; font-size:22px;" +
-            "  box-shadow:0 2px 8px rgba(0,0,0,0.09); }" +
+            "  box-shadow:0 2px 8px rgba(0,0,0,0.09); transition:transform 0.1s; }" +
+            ".item:active .icon { transform:scale(0.88); }" +
             ".item .label { font-size:10px; color:#4a7a2e; font-weight:600; text-align:center; }" +
             ".card { background:white; border-radius:16px; padding:14px;" +
             "  box-shadow:0 2px 10px rgba(0,0,0,0.06); margin-bottom:12px; }" +
@@ -191,10 +169,9 @@ public class MainActivity extends AppCompatActivity {
             ".ctext p { font-size:11px; color:#7aaa5a; margin-top:2px; }" +
             ".badge { display:inline-block; background:#e8f5e0; color:#3a7d1e;" +
             "  padding:2px 8px; border-radius:20px; font-size:10px; font-weight:700; margin-top:4px; }" +
-            ".item:active .icon { transform:scale(0.92); }" +
             "</style></head><body>" +
             "<h1>KiwiPlus 🥝</h1>" +
-            "<p class='subtitle'>browse free · 🔒 מוצפן · 📡 עוקף חסימות</p>" +
+            "<p class='subtitle'>browse free · 🔒 פרוקסי מאובטח · 📡 עוקף חסימות</p>" +
             "<p class='section-title'>קישורים מהירים</p>" +
             "<div class='grid'>" +
             "<div class='item' onclick=\"go('https://github.com')\"><div class='icon'>🐙</div><div class='label'>GitHub</div></div>" +
@@ -207,15 +184,14 @@ public class MainActivity extends AppCompatActivity {
             "<div class='item' onclick=\"go('https://telegram.org')\"><div class='icon'>✈️</div><div class='label'>Telegram</div></div>" +
             "</div>" +
             "<p class='section-title'>מצב</p>" +
-            "<div class='card'><div class='row'><div class='cicon'>📡</div><div class='ctext'>" +
-            "<h3>עוקף חסימות</h3><p>גולש דרך 4G כשהWiFi חוסם</p>" +
-            "<span class='badge'>🟢 פעיל</span></div></div></div>" +
+            "<div class='card'><div class='row'><div class='cicon'>🛡️</div><div class='ctext'>" +
+            "<h3>פרוקסי פרטי</h3><p>כל הגלישה דרך השרת שלך</p>" +
+            "<span class='badge'>🟢 kiwiplus-proxy.onrender.com</span></div></div></div>" +
             "<div class='card'><div class='row'><div class='cicon'>🎬</div><div class='ctext'>" +
-            "<h3>זיהוי מדיה</h3><p>לחץ ▶ לזיהוי קישורי וידאו אוטומטי</p>" +
+            "<h3>זיהוי מדיה</h3><p>לחץ ▶ לזיהוי ונגן HLS מובנה</p>" +
             "<span class='badge'>HLS · Kaltura · Video.js</span></div></div></div>" +
             "<script>function go(url){ window.location.href=url; }</script>" +
             "</body></html>";
-
         webView.loadDataWithBaseURL(HOME_BASE, html, "text/html", "UTF-8", null);
     }
 
@@ -230,10 +206,7 @@ public class MainActivity extends AppCompatActivity {
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setAllowFileAccess(true);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        settings.setUserAgentString(
-            "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 " +
-            "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-        );
+        settings.setUserAgentString(UA_MOBILE);
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -241,41 +214,44 @@ public class MainActivity extends AppCompatActivity {
                 String url = request.getUrl().toString();
                 checkForMedia(url);
 
-                if (url.startsWith(HOME_BASE)) return null;
+                if (url.startsWith(HOME_BASE) || url.startsWith(PROXY_URL)) return null;
+                if (!request.getMethod().equals("GET")) return null;
+                if (!url.startsWith("http")) return null;
 
-                if (isOnWifi() && cellularClient != null && request.getMethod().equals("GET")) {
-                    try {
-                        Request.Builder reqBuilder = new Request.Builder().url(url);
-                        for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
-                            try { reqBuilder.addHeader(header.getKey(), header.getValue()); } catch (Exception ignored) {}
-                        }
-                        Response response = cellularClient.newCall(reqBuilder.build()).execute();
-                        if (response.body() == null) return null;
-
-                        String contentType = response.header("Content-Type", "text/plain");
-                        String mimeType = contentType != null && contentType.contains(";")
-                            ? contentType.split(";")[0].trim() : contentType;
-
-                        HashMap<String, String> headers = new HashMap<>();
-                        for (String name : response.headers().names()) {
-                            String val = response.header(name);
-                            if (val != null) headers.put(name, val);
-                        }
-
-                        String message = response.message();
-                        if (message == null || message.isEmpty()) message = "OK";
-
-                        return new WebResourceResponse(
-                            mimeType, "UTF-8",
-                            response.code(), message,
-                            headers,
-                            response.body().byteStream()
-                        );
-                    } catch (Exception e) {
-                        return null;
+                try {
+                    String proxyTarget = PROXY_URL + url;
+                    Request.Builder reqBuilder = new Request.Builder().url(proxyTarget);
+                    for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
+                        try { reqBuilder.addHeader(header.getKey(), header.getValue()); } catch (Exception ignored) {}
                     }
+                    reqBuilder.addHeader("X-Forwarded-For", "1.1.1.1");
+
+                    Response response = proxyClient.newCall(reqBuilder.build()).execute();
+                    if (response.body() == null) return null;
+
+                    String contentType = response.header("Content-Type", "text/plain");
+                    String mimeType = contentType != null && contentType.contains(";")
+                        ? contentType.split(";")[0].trim() : contentType;
+
+                    HashMap<String, String> headers = new HashMap<>();
+                    for (String name : response.headers().names()) {
+                        String val = response.header(name);
+                        if (val != null) headers.put(name, val);
+                    }
+                    headers.put("Access-Control-Allow-Origin", "*");
+
+                    String message = response.message();
+                    if (message == null || message.isEmpty()) message = "OK";
+
+                    return new WebResourceResponse(
+                        mimeType, "UTF-8",
+                        response.code(), message,
+                        headers,
+                        response.body().byteStream()
+                    );
+                } catch (Exception e) {
+                    return null;
                 }
-                return null;
             }
 
             @Override
@@ -311,10 +287,8 @@ public class MainActivity extends AppCompatActivity {
             public void onProgressChanged(WebView view, int newProgress) {
                 progressBar.setProgress(newProgress);
             }
-
             private View customView;
             private CustomViewCallback customViewCallback;
-
             @Override
             public void onShowCustomView(View view, CustomViewCallback callback) {
                 if (customView != null) { callback.onCustomViewHidden(); return; }
@@ -323,45 +297,49 @@ public class MainActivity extends AppCompatActivity {
                 getWindow().getDecorView().setSystemUiVisibility(
                     View.SYSTEM_UI_FLAG_FULLSCREEN |
                     View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                );
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
                 setContentView(customView);
             }
-
             @Override
             public void onHideCustomView() {
                 setContentView(R.layout.activity_main);
-                if (customViewCallback != null) {
-                    customViewCallback.onCustomViewHidden();
-                    customViewCallback = null;
-                }
+                if (customViewCallback != null) { customViewCallback.onCustomViewHidden(); customViewCallback = null; }
                 customView = null;
                 recreate();
             }
         });
     }
 
+    private void toggleDesktopMode() {
+        isDesktopMode = !isDesktopMode;
+        WebSettings settings = webView.getSettings();
+        if (isDesktopMode) {
+            settings.setUserAgentString(UA_DESKTOP);
+            btnDesktop.setColorFilter(getResources().getColor(android.R.color.holo_green_light, null));
+            Toast.makeText(this, "🖥️ מצב מחשב פעיל", Toast.LENGTH_SHORT).show();
+        } else {
+            settings.setUserAgentString(UA_MOBILE);
+            btnDesktop.setColorFilter(getResources().getColor(android.R.color.darker_gray, null));
+            Toast.makeText(this, "📱 מצב מובייל", Toast.LENGTH_SHORT).show();
+        }
+        webView.reload();
+    }
+
     private void injectMediaScanner(WebView view) {
-        // מזריק hls.js לדף כדי לזהות m3u8 גם מVideo.js
         String js =
             "(function() {" +
             "  var urls = [];" +
             "  document.querySelectorAll('video, audio, source').forEach(function(el) {" +
             "    if (el.src && el.src.startsWith('http')) urls.push(el.src);" +
             "    if (el.currentSrc && el.currentSrc.startsWith('http')) urls.push(el.currentSrc);" +
-            "    if (el.getAttribute && el.getAttribute('src')) urls.push(el.getAttribute('src'));" +
             "  });" +
             "  try {" +
             "    if (typeof videojs !== 'undefined') {" +
             "      var players = videojs.getPlayers();" +
             "      for (var id in players) {" +
             "        var p = players[id];" +
-            "        try { var s = p.currentSrc(); if(s && s.startsWith('http')) urls.push(s); } catch(e){}" +
-            "        try { var s2 = p.src(); if(s2 && s2.startsWith('http')) urls.push(s2); } catch(e){}" +
-            "        try {" +
-            "          var tech = p.tech({IWillNotUseThisInPlugins:true});" +
-            "          if(tech && tech.src_) urls.push(tech.src_);" +
-            "        } catch(e){}" +
+            "        try { var s = p.currentSrc(); if(s) urls.push(s); } catch(e){}" +
+            "        try { var s2 = p.src(); if(s2 && typeof s2==='string') urls.push(s2); } catch(e){}" +
             "      }" +
             "    }" +
             "  } catch(e) {}" +
@@ -369,12 +347,10 @@ public class MainActivity extends AppCompatActivity {
             "    var src = el.src || '';" +
             "    if (src.indexOf('kaltura') !== -1 || src.indexOf('entry_id') !== -1) urls.push(src);" +
             "  });" +
-            "  var html = document.documentElement.innerHTML;" +
-            "  var km = html.match(/entry_id[^a-zA-Z0-9_]*([a-zA-Z0-9_]{5,})/g);" +
-            "  if (km) km.forEach(function(m) {" +
-            "    urls.push('kaltura:entry_id=' + m.replace(/entry_id[^a-zA-Z0-9_]*/, ''));" +
-            "  });" +
-            "  var m3u = html.match(/https?:[^'\"\\s\\\\]+\\.m3u8[^'\"\\s\\\\]*/g);" +
+            "  var h = document.documentElement.innerHTML;" +
+            "  var km = h.match(/entry_id[^a-zA-Z0-9_]*([a-zA-Z0-9_]{5,})/g);" +
+            "  if (km) km.forEach(function(m) { urls.push('kaltura:entry_id=' + m.replace(/entry_id[^a-zA-Z0-9_]*/, '')); });" +
+            "  var m3u = h.match(/https?:[^'\"\\s\\\\]+\\.m3u8[^'\"\\s\\\\]*/g);" +
             "  if (m3u) m3u.forEach(function(u) { urls.push(u); });" +
             "  return JSON.stringify(urls.filter(function(v,i,a){ return v && a.indexOf(v)===i; }));" +
             "})()";
@@ -412,10 +388,9 @@ public class MainActivity extends AppCompatActivity {
     private void setupButtons() {
         btnBack.setOnClickListener(v -> { if (webView.canGoBack()) webView.goBack(); });
         btnForward.setOnClickListener(v -> { if (webView.canGoForward()) webView.goForward(); });
-        btnRefresh.setOnClickListener(v -> {
-            if (isHomePage) showHomePage();
-            else webView.reload();
-        });
+        btnHome.setOnClickListener(v -> showHomePage());
+        btnDesktop.setOnClickListener(v -> toggleDesktopMode());
+        btnRefresh.setOnClickListener(v -> { if (isHomePage) showHomePage(); else webView.reload(); });
         btnMedia.setOnClickListener(v -> showMediaDialog());
         swipeRefresh.setOnRefreshListener(() -> webView.reload());
     }
@@ -433,8 +408,13 @@ public class MainActivity extends AppCompatActivity {
         new AlertDialog.Builder(this)
             .setTitle("🎬 קישורי מדיה (" + mediaUrls.size() + ")")
             .setItems(items, (dialog, which) -> {
-                copyToClipboard(items[which]);
-                Toast.makeText(this, "✅ הקישור הועתק!", Toast.LENGTH_SHORT).show();
+                String selectedUrl = items[which];
+                if (selectedUrl.contains(".m3u8")) {
+                    openHlsPlayer(selectedUrl);
+                } else {
+                    copyToClipboard(selectedUrl);
+                    Toast.makeText(this, "✅ הקישור הועתק!", Toast.LENGTH_SHORT).show();
+                }
             })
             .setPositiveButton("📋 העתק הכל", (dialog, which) -> {
                 copyToClipboard(allUrlsStr);
@@ -444,11 +424,27 @@ public class MainActivity extends AppCompatActivity {
             .show();
     }
 
+    private void openHlsPlayer(String m3u8Url) {
+        String playerHtml = "<!DOCTYPE html><html><head>" +
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
+            "<style>* {margin:0;padding:0;box-sizing:border-box;} body{background:#000;display:flex;align-items:center;justify-content:center;height:100vh;} video{width:100%;max-height:100vh;}</style>" +
+            "<script src='https://cdn.jsdelivr.net/npm/hls.js@latest'></script>" +
+            "</head><body>" +
+            "<video id='v' controls autoplay playsinline></video>" +
+            "<script>" +
+            "var url='" + m3u8Url.replace("'", "\\'") + "';" +
+            "var video=document.getElementById('v');" +
+            "if(Hls.isSupported()){var hls=new Hls();hls.loadSource(url);hls.attachMedia(video);hls.on(Hls.Events.MANIFEST_PARSED,function(){video.play();});}" +
+            "else if(video.canPlayType('application/vnd.apple.mpegurl')){video.src=url;video.play();}" +
+            "</script></body></html>";
+        webView.loadDataWithBaseURL("https://kiwiplus.player", playerHtml, "text/html", "UTF-8", null);
+        urlBar.setText("🎬 נגן HLS");
+    }
+
     private void copyToClipboard(String text) {
         android.content.ClipboardManager clipboard =
             (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        android.content.ClipData clip =
-            android.content.ClipData.newPlainText("media url", text);
+        android.content.ClipData clip = android.content.ClipData.newPlainText("media url", text);
         clipboard.setPrimaryClip(clip);
     }
 
