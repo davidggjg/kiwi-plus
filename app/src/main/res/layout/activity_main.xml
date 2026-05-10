@@ -56,14 +56,6 @@
                 android:textSize="13sp" />
 
             <ImageButton
-                android:id="@+id/btnDesktop"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:src="@android:drawable/ic_menu_manage"
-                android:tint="#888888" />
-
-            <ImageButton
                 android:id="@+id/btnMedia"
                 android:layout_width="36dp"
                 android:layout_height="36dp"
@@ -77,6 +69,14 @@
                 android:layout_height="36dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:src="@android:drawable/ic_popup_sync"
+                android:tint="#ffffff" />
+
+            <ImageButton
+                android:id="@+id/btnMenu"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@android:drawable/ic_menu_more"
                 android:tint="#ffffff" />
 
         </LinearLayout>
@@ -103,7 +103,6 @@
 
     </LinearLayout>
 
-    <!-- Splash Screen -->
     <LinearLayout
         android:id="@+id/splashScreen"
         android:layout_width="match_parent"
