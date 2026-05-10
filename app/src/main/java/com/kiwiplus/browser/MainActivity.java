@@ -80,7 +80,6 @@ public class MainActivity extends AppCompatActivity {
     private static final String HOME_BASE = "https://kiwiplus.local";
     private OkHttpClient proxyClient;
 
-    // JavaScript Interface - גשר בין JS לJava
     public class MediaBridge {
         @JavascriptInterface
         public void onMediaFound(String url) {
@@ -98,7 +97,6 @@ public class MainActivity extends AppCompatActivity {
                         mediaUrls.add(src);
                         updateMediaButton(true);
                     }
-                    // אם זה m3u8 - הזרק hls.js אוטומטית
                     if (src.contains(".m3u8") && !hlsInjected) {
                         injectHlsIntoVideoJs(src);
                     }
@@ -134,8 +132,6 @@ public class MainActivity extends AppCompatActivity {
 
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         webView.setBackgroundColor(0xFFf0f7ee);
-
-        // חיבור JavaScript Bridge
         webView.addJavascriptInterface(new MediaBridge(), "KiwiPlus");
 
         showSplash();
@@ -216,3 +212,394 @@ public class MainActivity extends AppCompatActivity {
             "<div class='item' onclick=\"go('https://reddit.com')\"><div class='icon'>🤖</div><div class='label'>Reddit</div></div>" +
             "<div class='item' onclick=\"go('https://instagram.com')\"><div class='icon'>📸</div><div class='label'>Instagram</div></div>" +
             "<div class='item' onclick=\"go('https://web.whatsapp.com')\"><div class='icon'>💬</div><div class='label'>WhatsApp</div></div>" +
+            "<div class='item' onclick=\"go('https://duckduckgo.com')\"><div class='icon'>🔍</div><div class='label'>DuckDuckGo</div></div>" +
+            "<div class='item' onclick=\"go('https://telegram.org')\"><div class='icon'>✈️</div><div class='label'>Telegram</div></div>" +
+            "</div>" +
+            "<p class='section-title'>מצב</p>" +
+            "<div class='card'><div class='row'><div class='cicon'>🛡️</div><div class='ctext'>" +
+            "<h3>פרוקסי פרטי</h3><p>כל הגלישה דרך השרת שלך</p>" +
+            "<span class='badge'>🟢 פעיל</span></div></div></div>" +
+            "<div class='card'><div class='row'><div class='cicon'>🎬</div><div class='ctext'>" +
+            "<h3>זיהוי מדיה אוטומטי</h3><p>Video.js · HLS · Kaltura</p>" +
+            "<span class='badge'>🟢 Bridge פעיל</span></div></div></div>" +
+            "<script>function go(url){ window.location.href=url; }</script>" +
+            "</body></html>";
+        webView.loadDataWithBaseURL(HOME_BASE, html, "text/html", "UTF-8", null);
+    }
+
+    private void setupWebView() {
+        WebSettings settings = webView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setLoadWithOverviewMode(true);
+        settings.setUseWideViewPort(true);
+        settings.setBuiltInZoomControls(true);
+        settings.setDisplayZoomControls(false);
+        settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setAllowFileAccess(true);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        settings.setCacheMode(WebSettings.LOAD_CACHE_ELSE_NETWORK);
+        settings.setUserAgentString(UA_MOBILE);
+
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                String url = request.getUrl().toString();
+                checkForMedia(url);
+                if (url.startsWith(HOME_BASE) || url.startsWith(PROXY_URL)) return null;
+                if (!request.getMethod().equals("GET")) return null;
+                if (!url.startsWith("http")) return null;
+                try {
+                    String proxyTarget = PROXY_URL + url;
+                    Request.Builder reqBuilder = new Request.Builder().url(proxyTarget);
+                    for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
+                        try { reqBuilder.addHeader(header.getKey(), header.getValue()); } catch (Exception ignored) {}
+                    }
+                    Response response = proxyClient.newCall(reqBuilder.build()).execute();
+                    if (response.body() == null) return null;
+                    String contentType = response.header("Content-Type", "text/plain");
+                    String mimeType = contentType != null && contentType.contains(";")
+                        ? contentType.split(";")[0].trim() : contentType;
+                    HashMap<String, String> headers = new HashMap<>();
+                    for (String name : response.headers().names()) {
+                        String val = response.header(name);
+                        if (val != null) headers.put(name, val);
+                    }
+                    headers.put("Access-Control-Allow-Origin", "*");
+                    String message = response.message();
+                    if (message == null || message.isEmpty()) message = "OK";
+                    return new WebResourceResponse(mimeType, "UTF-8",
+                        response.code(), message, headers, response.body().byteStream());
+                } catch (Exception e) { return null; }
+            }
+
+            @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                if (isHomePage || url.startsWith(HOME_BASE)) return;
+                mediaUrls.clear();
+                hlsInjected = false;
+                updateMediaButton(false);
+                progressBar.setVisibility(View.VISIBLE);
+                urlBar.setText(url);
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                if (url.startsWith(HOME_BASE)) { isHomePage = false; return; }
+                if (isHomePage) { isHomePage = false; return; }
+                progressBar.setVisibility(View.GONE);
+                urlBar.setText(url);
+                btnBack.setAlpha(view.canGoBack() ? 1f : 0.4f);
+                btnForward.setAlpha(view.canGoForward() ? 1f : 0.4f);
+                swipeRefresh.setRefreshing(false);
+                injectVideoJsListener(view);
+                injectMediaScanner(view);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                progressBar.setVisibility(View.GONE);
+                swipeRefresh.setRefreshing(false);
+            }
+        });
+
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onProgressChanged(WebView view, int newProgress) {
+                progressBar.setProgress(newProgress);
+            }
+            private View customView;
+            private CustomViewCallback customViewCallback;
+            @Override
+            public void onShowCustomView(View view, CustomViewCallback callback) {
+                if (customView != null) { callback.onCustomViewHidden(); return; }
+                customView = view;
+                customViewCallback = callback;
+                getWindow().getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_FULLSCREEN |
+                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+                setContentView(customView);
+            }
+            @Override
+            public void onHideCustomView() {
+                setContentView(R.layout.activity_main);
+                if (customViewCallback != null) { customViewCallback.onCustomViewHidden(); customViewCallback = null; }
+                customView = null;
+                recreate();
+            }
+        });
+    }
+
+    private void injectVideoJsListener(WebView view) {
+        String js =
+            "(function() {" +
+            "  function checkVideoJs() {" +
+            "    if (typeof videojs === 'undefined') return;" +
+            "    var players = videojs.getPlayers();" +
+            "    for (var id in players) {" +
+            "      var p = players[id];" +
+            "      if (!p._kiwiListening) {" +
+            "        p._kiwiListening = true;" +
+            "        p.on('loadstart', function() {" +
+            "          try { var src = this.currentSrc(); if (src) window.KiwiPlus.onVideoJsReady(src); } catch(e) {}" +
+            "        });" +
+            "        p.on('sourceset', function(e) {" +
+            "          try { if (e.src) window.KiwiPlus.onVideoJsReady(e.src); } catch(e2) {}" +
+            "        });" +
+            "        try { var src = p.currentSrc(); if (src) window.KiwiPlus.onVideoJsReady(src); } catch(e) {}" +
+            "      }" +
+            "    }" +
+            "    if (videojs.hooks && !window._kiwiHooked) {" +
+            "      window._kiwiHooked = true;" +
+            "      videojs.hook('setup', function(p) {" +
+            "        p.ready(function() {" +
+            "          var src = p.currentSrc();" +
+            "          if (src) window.KiwiPlus.onVideoJsReady(src);" +
+            "          p.on('loadstart', function() {" +
+            "            var s = this.currentSrc(); if (s) window.KiwiPlus.onVideoJsReady(s);" +
+            "          });" +
+            "        });" +
+            "      });" +
+            "    }" +
+            "  }" +
+            "  var count = 0;" +
+            "  var interval = setInterval(function() {" +
+            "    checkVideoJs(); count++; if (count > 10) clearInterval(interval);" +
+            "  }, 1000);" +
+            "  checkVideoJs();" +
+            "})()";
+        view.evaluateJavascript(js, null);
+    }
+
+    private void injectHlsIntoVideoJs(String m3u8Url) {
+        hlsInjected = true;
+        String js =
+            "(function() {" +
+            "  var url = '" + m3u8Url.replace("'", "\\'") + "';" +
+            "  function doInject() {" +
+            "    if (!Hls.isSupported()) return;" +
+            "    document.querySelectorAll('video').forEach(function(video) {" +
+            "      var src = video.src || video.currentSrc || '';" +
+            "      if (!src && video.querySelector('source')) src = video.querySelector('source').src || '';" +
+            "      if (src.indexOf('.m3u8') !== -1 || url.indexOf('.m3u8') !== -1) {" +
+            "        var hls = new Hls({ enableWorker:true, lowLatencyMode:true });" +
+            "        hls.loadSource(src || url);" +
+            "        hls.attachMedia(video);" +
+            "        hls.on(Hls.Events.MANIFEST_PARSED, function() { video.play().catch(function(){}); });" +
+            "      }" +
+            "    });" +
+            "  }" +
+            "  if (typeof Hls === 'undefined') {" +
+            "    var s = document.createElement('script');" +
+            "    s.src = 'https://cdn.jsdelivr.net/npm/hls.js@latest';" +
+            "    s.onload = doInject;" +
+            "    document.head.appendChild(s);" +
+            "  } else { doInject(); }" +
+            "})()";
+        webView.evaluateJavascript(js, value ->
+            runOnUiThread(() -> Toast.makeText(this, "🎬 HLS.js הוזרק!", Toast.LENGTH_SHORT).show())
+        );
+    }
+
+    private void injectHlsJs() {
+        if (hlsInjected) {
+            Toast.makeText(this, "✅ HLS.js כבר פעיל", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        for (String u : mediaUrls) {
+            if (u.contains(".m3u8")) {
+                injectHlsIntoVideoJs(u);
+                return;
+            }
+        }
+        injectHlsIntoVideoJs("");
+    }
+
+    private void showMenu() {
+        PopupMenu popup = new PopupMenu(this, btnMenu);
+        popup.getMenu().add(0, 1, 0, isDesktopMode ? "📱 מצב מובייל" : "🖥️ מצב מחשב");
+        popup.getMenu().add(0, 2, 0, "🎬 הפעל נגן HLS");
+        popup.getMenu().add(0, 3, 0, "🔄 רענן דף");
+        popup.getMenu().add(0, 4, 0, "🏠 דף בית");
+        popup.getMenu().add(0, 5, 0, "🗑️ נקה Cache");
+        popup.getMenu().add(0, 6, 0, "📋 העתק כתובת");
+        popup.getMenu().add(0, 7, 0, "🔍 חפש בדף");
+        popup.setOnMenuItemClickListener(item -> {
+            switch (item.getItemId()) {
+                case 1: toggleDesktopMode(); break;
+                case 2: injectHlsJs(); break;
+                case 3: webView.reload(); break;
+                case 4: showHomePage(); break;
+                case 5:
+                    webView.clearCache(true);
+                    Toast.makeText(this, "🗑️ Cache נוקה!", Toast.LENGTH_SHORT).show();
+                    break;
+                case 6:
+                    copyToClipboard(webView.getUrl() != null ? webView.getUrl() : "");
+                    Toast.makeText(this, "✅ כתובת הועתקה!", Toast.LENGTH_SHORT).show();
+                    break;
+                case 7: showSearchInPage(); break;
+            }
+            return true;
+        });
+        popup.show();
+    }
+
+    private void showSearchInPage() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("🔍 חפש בדף");
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setHint("מילת חיפוש...");
+        builder.setView(input);
+        builder.setPositiveButton("חפש", (dialog, which) -> {
+            String query = input.getText().toString();
+            if (!query.isEmpty()) webView.findAllAsync(query);
+        });
+        builder.setNegativeButton("סגור", (dialog, which) -> webView.clearMatches());
+        builder.show();
+    }
+
+    private void toggleDesktopMode() {
+        isDesktopMode = !isDesktopMode;
+        WebSettings settings = webView.getSettings();
+        if (isDesktopMode) {
+            settings.setUserAgentString(UA_DESKTOP);
+            Toast.makeText(this, "🖥️ מצב מחשב פעיל", Toast.LENGTH_SHORT).show();
+        } else {
+            settings.setUserAgentString(UA_MOBILE);
+            Toast.makeText(this, "📱 מצב מובייל", Toast.LENGTH_SHORT).show();
+        }
+        webView.reload();
+    }
+
+    private void injectMediaScanner(WebView view) {
+        String js =
+            "(function() {" +
+            "  document.querySelectorAll('video, audio, source').forEach(function(el) {" +
+            "    if (el.src && el.src.startsWith('http')) window.KiwiPlus.onMediaFound(el.src);" +
+            "    if (el.currentSrc && el.currentSrc.startsWith('http')) window.KiwiPlus.onMediaFound(el.currentSrc);" +
+            "  });" +
+            "  var h = document.documentElement.innerHTML;" +
+            "  var m3u = h.match(/https?:[^'\"\\s\\\\]+\\.m3u8[^'\"\\s\\\\]*/g);" +
+            "  if (m3u) m3u.forEach(function(u) { window.KiwiPlus.onMediaFound(u); });" +
+            "  var km = h.match(/entry_id[^a-zA-Z0-9_]*([a-zA-Z0-9_]{5,})/g);" +
+            "  if (km) km.forEach(function(m) {" +
+            "    window.KiwiPlus.onMediaFound('kaltura:entry_id=' + m.replace(/entry_id[^a-zA-Z0-9_]*/, ''));" +
+            "  });" +
+            "})()";
+        view.evaluateJavascript(js, null);
+    }
+
+    private void checkForMedia(String url) {
+        if (MEDIA_PATTERN.matcher(url).matches() || KALTURA_PATTERN.matcher(url).matches()) {
+            if (!mediaUrls.contains(url)) {
+                mediaUrls.add(url);
+                runOnUiThread(() -> updateMediaButton(true));
+            }
+        }
+    }
+
+    private void updateMediaButton(boolean hasMedia) {
+        btnMedia.setColorFilter(hasMedia ?
+            getResources().getColor(android.R.color.holo_purple, null) :
+            getResources().getColor(android.R.color.darker_gray, null));
+    }
+
+    private void setupButtons() {
+        btnBack.setOnClickListener(v -> { if (webView.canGoBack()) webView.goBack(); });
+        btnForward.setOnClickListener(v -> { if (webView.canGoForward()) webView.goForward(); });
+        btnHome.setOnClickListener(v -> showHomePage());
+        btnMenu.setOnClickListener(v -> showMenu());
+        btnRefresh.setOnClickListener(v -> { if (isHomePage) showHomePage(); else webView.reload(); });
+        btnMedia.setOnClickListener(v -> showMediaDialog());
+        swipeRefresh.setOnRefreshListener(() -> webView.reload());
+    }
+
+    private void showMediaDialog() {
+        if (mediaUrls.isEmpty()) {
+            Toast.makeText(this, "לא נמצאו קישורי מדיה", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String[] items = mediaUrls.toArray(new String[0]);
+        StringBuilder allUrls = new StringBuilder();
+        for (String u : mediaUrls) allUrls.append(u).append("\n");
+        String allUrlsStr = allUrls.toString().trim();
+        new AlertDialog.Builder(this)
+            .setTitle("🎬 קישורי מדיה (" + mediaUrls.size() + ")")
+            .setItems(items, (dialog, which) -> {
+                String selectedUrl = items[which];
+                if (selectedUrl.contains(".m3u8")) {
+                    openHlsPlayer(selectedUrl);
+                } else {
+                    copyToClipboard(selectedUrl);
+                    Toast.makeText(this, "✅ הקישור הועתק!", Toast.LENGTH_SHORT).show();
+                }
+            })
+            .setPositiveButton("📋 העתק הכל", (dialog, which) -> {
+                copyToClipboard(allUrlsStr);
+                Toast.makeText(this, "✅ כל הקישורים הועתקו!", Toast.LENGTH_SHORT).show();
+            })
+            .setNegativeButton("סגור", null)
+            .show();
+    }
+
+    private void openHlsPlayer(String m3u8Url) {
+        String playerHtml = "<!DOCTYPE html><html><head>" +
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
+            "<style>*{margin:0;padding:0;box-sizing:border-box;}body{background:#000;display:flex;align-items:center;justify-content:center;height:100vh;}video{width:100%;max-height:100vh;}</style>" +
+            "<script src='https://cdn.jsdelivr.net/npm/hls.js@latest'></script>" +
+            "</head><body><video id='v' controls autoplay playsinline></video><script>" +
+            "var url='" + m3u8Url.replace("'", "\\'") + "';" +
+            "var video=document.getElementById('v');" +
+            "if(Hls.isSupported()){" +
+            "  var hls=new Hls({enableWorker:true,lowLatencyMode:true});" +
+            "  hls.loadSource(url);" +
+            "  hls.attachMedia(video);" +
+            "  hls.on(Hls.Events.MANIFEST_PARSED,function(){video.play().catch(function(){});});" +
+            "} else if(video.canPlayType('application/vnd.apple.mpegurl')){" +
+            "  video.src=url; video.play();" +
+            "}" +
+            "</script></body></html>";
+        webView.loadDataWithBaseURL("https://kiwiplus.player", playerHtml, "text/html", "UTF-8", null);
+        urlBar.setText("🎬 נגן HLS");
+    }
+
+    private void copyToClipboard(String text) {
+        android.content.ClipboardManager clipboard =
+            (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        android.content.ClipData clip = android.content.ClipData.newPlainText("url", text);
+        clipboard.setPrimaryClip(clip);
+    }
+
+    private void setupUrlBar() {
+        urlBar.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_GO ||
+                (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
+                loadUrl(urlBar.getText().toString().trim());
+                return true;
+            }
+            return false;
+        });
+    }
+
+    private void loadUrl(String input) {
+        input = input.trim();
+        isHomePage = false;
+        String url;
+        if (input.startsWith("http://") || input.startsWith("https://")) {
+            url = input;
+        } else if (input.contains(".") && !input.contains(" ")) {
+            url = "https://" + input;
+        } else {
+            url = "https://duckduckgo.com/?q=" + Uri.encode(input);
+        }
+        webView.loadUrl(url);
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (webView.canGoBack()) webView.goBack();
+        else super.onBackPressed();
+    }
+                        }
