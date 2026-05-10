@@ -10,6 +10,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.view.KeyEvent;
+import android.view.MenuItem;
 import android.view.View;
 import android.view.animation.AlphaAnimation;
 import android.view.animation.Animation;
@@ -25,6 +26,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.EditText;
 import android.widget.ImageButton;
+import android.widget.PopupMenu;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -34,6 +36,7 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 import okhttp3.OkHttpClient;
@@ -45,15 +48,15 @@ public class MainActivity extends AppCompatActivity {
     private WebView webView;
     private EditText urlBar;
     private ProgressBar progressBar;
-    private ImageButton btnBack, btnForward, btnRefresh, btnMedia, btnHome, btnDesktop;
+    private ImageButton btnBack, btnForward, btnRefresh, btnMedia, btnHome, btnMenu;
     private SwipeRefreshLayout swipeRefresh;
     private View splashScreen;
     private TextView splashTitle, splashSubtitle;
     private List<String> mediaUrls = new ArrayList<>();
     private boolean isHomePage = false;
     private boolean isDesktopMode = false;
+    private boolean hlsInjected = false;
 
-    // שרת הפרוקסי שלנו
     private static final String PROXY_URL = "https://kiwiplus-proxy.onrender.com/";
 
     private static final String UA_MOBILE =
@@ -91,18 +94,22 @@ public class MainActivity extends AppCompatActivity {
         btnRefresh = findViewById(R.id.btnRefresh);
         btnMedia = findViewById(R.id.btnMedia);
         btnHome = findViewById(R.id.btnHome);
-        btnDesktop = findViewById(R.id.btnDesktop);
+        btnMenu = findViewById(R.id.btnMenu);
         swipeRefresh = findViewById(R.id.swipeRefresh);
         splashScreen = findViewById(R.id.splashScreen);
         splashTitle = findViewById(R.id.splashTitle);
         splashSubtitle = findViewById(R.id.splashSubtitle);
 
         proxyClient = new OkHttpClient.Builder()
-            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .connectionPool(new okhttp3.ConnectionPool(5, 30, TimeUnit.SECONDS))
             .build();
 
+        // Hardware acceleration
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         webView.setBackgroundColor(0xFFf0f7ee);
+
         showSplash();
         setupWebView();
         setupButtons();
@@ -142,6 +149,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void showHomePage() {
         isHomePage = true;
+        hlsInjected = false;
         urlBar.setText("");
         urlBar.setHint("חפש או הכנס כתובת");
         String html = "<!DOCTYPE html><html dir='rtl'><head>" +
@@ -186,9 +194,9 @@ public class MainActivity extends AppCompatActivity {
             "<p class='section-title'>מצב</p>" +
             "<div class='card'><div class='row'><div class='cicon'>🛡️</div><div class='ctext'>" +
             "<h3>פרוקסי פרטי</h3><p>כל הגלישה דרך השרת שלך</p>" +
-            "<span class='badge'>🟢 kiwiplus-proxy.onrender.com</span></div></div></div>" +
+            "<span class='badge'>🟢 פעיל</span></div></div></div>" +
             "<div class='card'><div class='row'><div class='cicon'>🎬</div><div class='ctext'>" +
-            "<h3>זיהוי מדיה</h3><p>לחץ ▶ לזיהוי ונגן HLS מובנה</p>" +
+            "<h3>זיהוי מדיה אוטומטי</h3><p>⋮ תפריט ← הפעל נגן HLS</p>" +
             "<span class='badge'>HLS · Kaltura · Video.js</span></div></div></div>" +
             "<script>function go(url){ window.location.href=url; }</script>" +
             "</body></html>";
@@ -206,6 +214,7 @@ public class MainActivity extends AppCompatActivity {
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setAllowFileAccess(true);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        settings.setCacheMode(WebSettings.LOAD_CACHE_ELSE_NETWORK);
         settings.setUserAgentString(UA_MOBILE);
 
         webView.setWebViewClient(new WebViewClient() {
@@ -213,51 +222,38 @@ public class MainActivity extends AppCompatActivity {
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
                 checkForMedia(url);
-
                 if (url.startsWith(HOME_BASE) || url.startsWith(PROXY_URL)) return null;
                 if (!request.getMethod().equals("GET")) return null;
                 if (!url.startsWith("http")) return null;
-
                 try {
                     String proxyTarget = PROXY_URL + url;
                     Request.Builder reqBuilder = new Request.Builder().url(proxyTarget);
                     for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
                         try { reqBuilder.addHeader(header.getKey(), header.getValue()); } catch (Exception ignored) {}
                     }
-                    reqBuilder.addHeader("X-Forwarded-For", "1.1.1.1");
-
                     Response response = proxyClient.newCall(reqBuilder.build()).execute();
                     if (response.body() == null) return null;
-
                     String contentType = response.header("Content-Type", "text/plain");
                     String mimeType = contentType != null && contentType.contains(";")
                         ? contentType.split(";")[0].trim() : contentType;
-
                     HashMap<String, String> headers = new HashMap<>();
                     for (String name : response.headers().names()) {
                         String val = response.header(name);
                         if (val != null) headers.put(name, val);
                     }
                     headers.put("Access-Control-Allow-Origin", "*");
-
                     String message = response.message();
                     if (message == null || message.isEmpty()) message = "OK";
-
-                    return new WebResourceResponse(
-                        mimeType, "UTF-8",
-                        response.code(), message,
-                        headers,
-                        response.body().byteStream()
-                    );
-                } catch (Exception e) {
-                    return null;
-                }
+                    return new WebResourceResponse(mimeType, "UTF-8",
+                        response.code(), message, headers, response.body().byteStream());
+                } catch (Exception e) { return null; }
             }
 
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 if (isHomePage || url.startsWith(HOME_BASE)) return;
                 mediaUrls.clear();
+                hlsInjected = false;
                 updateMediaButton(false);
                 progressBar.setVisibility(View.VISIBLE);
                 urlBar.setText(url);
@@ -310,16 +306,113 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    // הזרקת hls.js לדף הנוכחי - מפעיל וידאו שלא עובד
+    private void injectHlsJs() {
+        if (hlsInjected) {
+            Toast.makeText(this, "✅ HLS.js כבר פעיל בדף זה", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String js =
+            "(function() {" +
+            "  if (window.Hls) { return 'already'; }" +
+            "  var s = document.createElement('script');" +
+            "  s.src = 'https://cdn.jsdelivr.net/npm/hls.js@latest';" +
+            "  s.onload = function() {" +
+            "    var videos = document.querySelectorAll('video');" +
+            "    videos.forEach(function(video) {" +
+            "      var src = video.src || video.currentSrc || '';" +
+            "      if (!src && video.querySelector('source')) src = video.querySelector('source').src;" +
+            "      if (src && src.indexOf('.m3u8') !== -1 && Hls.isSupported()) {" +
+            "        var hls = new Hls();" +
+            "        hls.loadSource(src);" +
+            "        hls.attachMedia(video);" +
+            "        hls.on(Hls.Events.MANIFEST_PARSED, function(){ video.play(); });" +
+            "      }" +
+            "    });" +
+            "    // Video.js players" +
+            "    if (typeof videojs !== 'undefined') {" +
+            "      var players = videojs.getPlayers();" +
+            "      for (var id in players) {" +
+            "        try {" +
+            "          var p = players[id];" +
+            "          var src = p.currentSrc();" +
+            "          if (src && src.indexOf('.m3u8') !== -1) {" +
+            "            var vid = p.el().querySelector('video');" +
+            "            if (vid && Hls.isSupported()) {" +
+            "              var hls = new Hls();" +
+            "              hls.loadSource(src);" +
+            "              hls.attachMedia(vid);" +
+            "              hls.on(Hls.Events.MANIFEST_PARSED, function(){ vid.play(); });" +
+            "            }" +
+            "          }" +
+            "        } catch(e) {}" +
+            "      }" +
+            "    }" +
+            "  };" +
+            "  document.head.appendChild(s);" +
+            "  return 'injected';" +
+            "})()";
+
+        webView.evaluateJavascript(js, value -> {
+            hlsInjected = true;
+            runOnUiThread(() -> Toast.makeText(this,
+                "✅ HLS.js הוזרק! הוידאו אמור להתחיל", Toast.LENGTH_SHORT).show());
+        });
+    }
+
+    private void showMenu() {
+        PopupMenu popup = new PopupMenu(this, btnMenu);
+        popup.getMenu().add(0, 1, 0, isDesktopMode ? "📱 מצב מובייל" : "🖥️ מצב מחשב");
+        popup.getMenu().add(0, 2, 0, "🎬 הפעל נגן HLS בדף זה");
+        popup.getMenu().add(0, 3, 0, "🔄 רענן דף");
+        popup.getMenu().add(0, 4, 0, "🏠 דף בית");
+        popup.getMenu().add(0, 5, 0, "🗑️ נקה Cache");
+        popup.getMenu().add(0, 6, 0, "📋 העתק כתובת");
+        popup.getMenu().add(0, 7, 0, "🔍 חפש בדף");
+
+        popup.setOnMenuItemClickListener(item -> {
+            switch (item.getItemId()) {
+                case 1: toggleDesktopMode(); break;
+                case 2: injectHlsJs(); break;
+                case 3: webView.reload(); break;
+                case 4: showHomePage(); break;
+                case 5:
+                    webView.clearCache(true);
+                    Toast.makeText(this, "🗑️ Cache נוקה!", Toast.LENGTH_SHORT).show();
+                    break;
+                case 6:
+                    copyToClipboard(webView.getUrl() != null ? webView.getUrl() : "");
+                    Toast.makeText(this, "✅ כתובת הועתקה!", Toast.LENGTH_SHORT).show();
+                    break;
+                case 7: showSearchInPage(); break;
+            }
+            return true;
+        });
+        popup.show();
+    }
+
+    private void showSearchInPage() {
+        android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this);
+        builder.setTitle("🔍 חפש בדף");
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setHint("מילת חיפוש...");
+        builder.setView(input);
+        builder.setPositiveButton("חפש", (dialog, which) -> {
+            String query = input.getText().toString();
+            if (!query.isEmpty()) webView.findAllAsync(query);
+        });
+        builder.setNegativeButton("סגור", (dialog, which) -> webView.clearMatches());
+        builder.show();
+    }
+
     private void toggleDesktopMode() {
         isDesktopMode = !isDesktopMode;
         WebSettings settings = webView.getSettings();
         if (isDesktopMode) {
             settings.setUserAgentString(UA_DESKTOP);
-            btnDesktop.setColorFilter(getResources().getColor(android.R.color.holo_green_light, null));
             Toast.makeText(this, "🖥️ מצב מחשב פעיל", Toast.LENGTH_SHORT).show();
         } else {
             settings.setUserAgentString(UA_MOBILE);
-            btnDesktop.setColorFilter(getResources().getColor(android.R.color.darker_gray, null));
             Toast.makeText(this, "📱 מצב מובייל", Toast.LENGTH_SHORT).show();
         }
         webView.reload();
@@ -389,7 +482,7 @@ public class MainActivity extends AppCompatActivity {
         btnBack.setOnClickListener(v -> { if (webView.canGoBack()) webView.goBack(); });
         btnForward.setOnClickListener(v -> { if (webView.canGoForward()) webView.goForward(); });
         btnHome.setOnClickListener(v -> showHomePage());
-        btnDesktop.setOnClickListener(v -> toggleDesktopMode());
+        btnMenu.setOnClickListener(v -> showMenu());
         btnRefresh.setOnClickListener(v -> { if (isHomePage) showHomePage(); else webView.reload(); });
         btnMedia.setOnClickListener(v -> showMediaDialog());
         swipeRefresh.setOnRefreshListener(() -> webView.reload());
@@ -427,11 +520,9 @@ public class MainActivity extends AppCompatActivity {
     private void openHlsPlayer(String m3u8Url) {
         String playerHtml = "<!DOCTYPE html><html><head>" +
             "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
-            "<style>* {margin:0;padding:0;box-sizing:border-box;} body{background:#000;display:flex;align-items:center;justify-content:center;height:100vh;} video{width:100%;max-height:100vh;}</style>" +
+            "<style>*{margin:0;padding:0;box-sizing:border-box;}body{background:#000;display:flex;align-items:center;justify-content:center;height:100vh;}video{width:100%;max-height:100vh;}</style>" +
             "<script src='https://cdn.jsdelivr.net/npm/hls.js@latest'></script>" +
-            "</head><body>" +
-            "<video id='v' controls autoplay playsinline></video>" +
-            "<script>" +
+            "</head><body><video id='v' controls autoplay playsinline></video><script>" +
             "var url='" + m3u8Url.replace("'", "\\'") + "';" +
             "var video=document.getElementById('v');" +
             "if(Hls.isSupported()){var hls=new Hls();hls.loadSource(url);hls.attachMedia(video);hls.on(Hls.Events.MANIFEST_PARSED,function(){video.play();});}" +
@@ -444,7 +535,7 @@ public class MainActivity extends AppCompatActivity {
     private void copyToClipboard(String text) {
         android.content.ClipboardManager clipboard =
             (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        android.content.ClipData clip = android.content.ClipData.newPlainText("media url", text);
+        android.content.ClipData clip = android.content.ClipData.newPlainText("url", text);
         clipboard.setPrimaryClip(clip);
     }
 
