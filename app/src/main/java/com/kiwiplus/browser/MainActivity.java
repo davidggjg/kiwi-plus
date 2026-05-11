@@ -2,6 +2,7 @@ package com.kiwiplus.browser;
 
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.net.ConnectivityManager;
 import android.net.Network;
@@ -33,6 +34,9 @@ import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -58,9 +62,20 @@ public class MainActivity extends AppCompatActivity {
     private boolean isHomePage = false;
     private boolean isDesktopMode = false;
     private boolean hlsInjected = false;
-
-    // אתרים שנחסמו - יעברו דרך פרוקסי
     private Set<String> blockedHosts = new HashSet<>();
+    private SharedPreferences prefs;
+
+    // קיצורי דרך ברירת מחדל
+    private static final String[][] DEFAULT_SHORTCUTS = {
+        {"GitHub", "https://github.com", "🐙"},
+        {"YouTube", "https://youtube.com", "▶️"},
+        {"Twitter", "https://twitter.com", "🐦"},
+        {"Reddit", "https://reddit.com", "🤖"},
+        {"Instagram", "https://instagram.com", "📸"},
+        {"WhatsApp", "https://web.whatsapp.com", "💬"},
+        {"DuckDuckGo", "https://duckduckgo.com", "🔍"},
+        {"Telegram", "https://telegram.org", "✈️"}
+    };
 
     private static final String PROXY_URL = "https://kiwiplus-proxy.onrender.com/";
 
@@ -68,8 +83,9 @@ public class MainActivity extends AppCompatActivity {
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
 
+    // Desktop UA בדיוק כמו Chrome
     private static final String UA_DESKTOP =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
     private static final Pattern MEDIA_PATTERN = Pattern.compile(
@@ -115,6 +131,8 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        prefs = getSharedPreferences("kiwiplus", MODE_PRIVATE);
 
         webView = findViewById(R.id.webView);
         urlBar = findViewById(R.id.urlBar);
@@ -182,11 +200,46 @@ public class MainActivity extends AppCompatActivity {
         splashScreen.startAnimation(fadeOut);
     }
 
+    private String buildShortcutsHtml() {
+        StringBuilder sb = new StringBuilder();
+        String saved = prefs.getString("shortcuts", null);
+        String[][] shortcuts = DEFAULT_SHORTCUTS;
+
+        if (saved != null) {
+            try {
+                JSONArray arr = new JSONArray(saved);
+                shortcuts = new String[arr.length()][3];
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject obj = arr.getJSONObject(i);
+                    shortcuts[i][0] = obj.getString("name");
+                    shortcuts[i][1] = obj.getString("url");
+                    shortcuts[i][2] = obj.getString("emoji");
+                }
+            } catch (Exception e) { /* use defaults */ }
+        }
+
+        for (String[] s : shortcuts) {
+            String domain = "";
+            try { domain = Uri.parse(s[1]).getHost(); } catch (Exception e) {}
+            sb.append("<div class='item' onclick=\"go('").append(s[1]).append("')\">");
+            sb.append("<div class='icon'>");
+            sb.append("<img src='https://www.google.com/s2/favicons?domain=").append(domain).append("&sz=64' ");
+            sb.append("onerror=\"this.style.display='none';this.nextSibling.style.display='flex'\" />");
+            sb.append("<span style='display:none'>").append(s[2]).append("</span>");
+            sb.append("</div>");
+            sb.append("<div class='label'>").append(s[0]).append("</div></div>");
+        }
+        return sb.toString();
+    }
+
     private void showHomePage() {
         isHomePage = true;
         hlsInjected = false;
         urlBar.setText("");
         urlBar.setHint("חפש או הכנס כתובת");
+
+        String shortcuts = buildShortcutsHtml();
+
         String html = "<!DOCTYPE html><html dir='rtl'><head>" +
             "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
             "<style>" +
@@ -195,12 +248,16 @@ public class MainActivity extends AppCompatActivity {
             "  font-family:sans-serif; color:#2d4a1e; min-height:100vh; padding:24px 16px 100px; }" +
             "h1 { font-size:36px; font-weight:900; color:#3a7d1e; margin-bottom:2px; }" +
             ".subtitle { font-size:12px; color:#7aaa5a; margin-bottom:24px; }" +
-            ".section-title { font-size:17px; font-weight:700; margin:20px 0 12px; color:#2d4a1e; }" +
+            ".section-title { font-size:17px; font-weight:700; margin:20px 0 12px; color:#2d4a1e;" +
+            "  display:flex; justify-content:space-between; align-items:center; }" +
+            ".edit-btn { font-size:12px; color:#7aaa5a; cursor:pointer; padding:4px 8px;" +
+            "  background:#e8f5e0; border-radius:12px; }" +
             ".grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:8px; }" +
             ".item { display:flex; flex-direction:column; align-items:center; gap:5px; cursor:pointer; }" +
             ".item .icon { width:54px; height:54px; border-radius:50%; background:white;" +
             "  display:flex; align-items:center; justify-content:center; font-size:22px;" +
-            "  box-shadow:0 2px 8px rgba(0,0,0,0.09); transition:transform 0.1s; }" +
+            "  box-shadow:0 2px 8px rgba(0,0,0,0.09); overflow:hidden; transition:transform 0.1s; }" +
+            ".item .icon img { width:32px; height:32px; object-fit:contain; }" +
             ".item:active .icon { transform:scale(0.88); }" +
             ".item .label { font-size:10px; color:#4a7a2e; font-weight:600; text-align:center; }" +
             ".card { background:white; border-radius:16px; padding:14px;" +
@@ -215,17 +272,11 @@ public class MainActivity extends AppCompatActivity {
             "</style></head><body>" +
             "<h1>KiwiPlus 🥝</h1>" +
             "<p class='subtitle'>browse free · 🔒 חכם · 📡 עוקף חסימות</p>" +
-            "<p class='section-title'>קישורים מהירים</p>" +
-            "<div class='grid'>" +
-            "<div class='item' onclick=\"go('https://github.com')\"><div class='icon'>🐙</div><div class='label'>GitHub</div></div>" +
-            "<div class='item' onclick=\"go('https://youtube.com')\"><div class='icon'>▶️</div><div class='label'>YouTube</div></div>" +
-            "<div class='item' onclick=\"go('https://twitter.com')\"><div class='icon'>🐦</div><div class='label'>Twitter</div></div>" +
-            "<div class='item' onclick=\"go('https://reddit.com')\"><div class='icon'>🤖</div><div class='label'>Reddit</div></div>" +
-            "<div class='item' onclick=\"go('https://instagram.com')\"><div class='icon'>📸</div><div class='label'>Instagram</div></div>" +
-            "<div class='item' onclick=\"go('https://web.whatsapp.com')\"><div class='icon'>💬</div><div class='label'>WhatsApp</div></div>" +
-            "<div class='item' onclick=\"go('https://duckduckgo.com')\"><div class='icon'>🔍</div><div class='label'>DuckDuckGo</div></div>" +
-            "<div class='item' onclick=\"go('https://telegram.org')\"><div class='icon'>✈️</div><div class='label'>Telegram</div></div>" +
+            "<div class='section-title'>" +
+            "  <span>קישורים מהירים</span>" +
+            "  <span class='edit-btn' onclick='addShortcut()'>+ הוסף</span>" +
             "</div>" +
+            "<div class='grid' id='shortcuts'>" + shortcuts + "</div>" +
             "<p class='section-title'>מצב</p>" +
             "<div class='card'><div class='row'><div class='cicon'>🛡️</div><div class='ctext'>" +
             "<h3>פרוקסי חכם</h3><p>ישיר כשאפשר, פרוקסי כשנחסם</p>" +
@@ -233,9 +284,55 @@ public class MainActivity extends AppCompatActivity {
             "<div class='card'><div class='row'><div class='cicon'>🎬</div><div class='ctext'>" +
             "<h3>זיהוי מדיה אוטומטי</h3><p>Video.js · HLS · Kaltura</p>" +
             "<span class='badge'>🟢 Bridge פעיל</span></div></div></div>" +
-            "<script>function go(url){ window.location.href=url; }</script>" +
+            "<script>" +
+            "function go(url){ window.location.href=url; }" +
+            "function addShortcut(){" +
+            "  var name = prompt('שם הקיצור:');" +
+            "  if (!name) return;" +
+            "  var url = prompt('כתובת האתר:');" +
+            "  if (!url) return;" +
+            "  if (!url.startsWith('http')) url = 'https://' + url;" +
+            "  window.KiwiPlus.addShortcut(name, url);" +
+            "}" +
+            "</script>" +
             "</body></html>";
+
         webView.loadDataWithBaseURL(HOME_BASE, html, "text/html", "UTF-8", null);
+    }
+
+    // JavaScript Interface - גשר בין JS לJava
+    public class MediaBridge2 {
+        @JavascriptInterface
+        public void addShortcut(String name, String url) {
+            runOnUiThread(() -> {
+                try {
+                    String saved = prefs.getString("shortcuts", null);
+                    JSONArray arr;
+                    if (saved != null) {
+                        arr = new JSONArray(saved);
+                    } else {
+                        arr = new JSONArray();
+                        for (String[] s : DEFAULT_SHORTCUTS) {
+                            JSONObject obj = new JSONObject();
+                            obj.put("name", s[0]);
+                            obj.put("url", s[1]);
+                            obj.put("emoji", s[2]);
+                            arr.put(obj);
+                        }
+                    }
+                    JSONObject newShortcut = new JSONObject();
+                    newShortcut.put("name", name);
+                    newShortcut.put("url", url);
+                    newShortcut.put("emoji", "🌐");
+                    arr.put(newShortcut);
+                    prefs.edit().putString("shortcuts", arr.toString()).apply();
+                    Toast.makeText(this, "✅ קיצור נוסף!", Toast.LENGTH_SHORT).show();
+                    showHomePage();
+                } catch (Exception e) {
+                    Toast.makeText(this, "שגיאה בהוספת קיצור", Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
     }
 
     private void setupWebView() {
@@ -252,6 +349,39 @@ public class MainActivity extends AppCompatActivity {
         settings.setCacheMode(WebSettings.LOAD_CACHE_ELSE_NETWORK);
         settings.setUserAgentString(UA_MOBILE);
 
+        // Bridge להוספת קיצורים
+        webView.addJavascriptInterface(new MediaBridge2() {
+            @JavascriptInterface
+            public void addShortcut(String name, String url) {
+                runOnUiThread(() -> {
+                    try {
+                        String saved = prefs.getString("shortcuts", null);
+                        JSONArray arr;
+                        if (saved != null) {
+                            arr = new JSONArray(saved);
+                        } else {
+                            arr = new JSONArray();
+                            for (String[] s : DEFAULT_SHORTCUTS) {
+                                JSONObject obj = new JSONObject();
+                                obj.put("name", s[0]);
+                                obj.put("url", s[1]);
+                                obj.put("emoji", s[2]);
+                                arr.put(obj);
+                            }
+                        }
+                        JSONObject newShortcut = new JSONObject();
+                        newShortcut.put("name", name);
+                        newShortcut.put("url", url);
+                        newShortcut.put("emoji", "🌐");
+                        arr.put(newShortcut);
+                        prefs.edit().putString("shortcuts", arr.toString()).apply();
+                        Toast.makeText(MainActivity.this, "✅ קיצור נוסף!", Toast.LENGTH_SHORT).show();
+                        showHomePage();
+                    } catch (Exception e) { /* ignore */ }
+                });
+            }
+        }, "KiwiPlus");
+
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
@@ -262,13 +392,10 @@ public class MainActivity extends AppCompatActivity {
                 if (!url.startsWith("http")) return null;
 
                 String host = request.getUrl().getHost();
-
-                // אם האתר הזה כבר נחסם בעבר - ישר לפרוקסי
                 if (host != null && blockedHosts.contains(host)) {
                     return fetchViaProxy(url, request);
                 }
 
-                // ניסיון ישיר קודם
                 try {
                     Request.Builder reqBuilder = new Request.Builder().url(url);
                     for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
@@ -278,8 +405,6 @@ public class MainActivity extends AppCompatActivity {
                     if (response.body() == null) return null;
 
                     int code = response.code();
-
-                    // אם נחסם (403/302 לדף חסימה) - שמור ועבור לפרוקסי
                     if (code == 403 || code == 407 || code == 451) {
                         response.close();
                         if (host != null) blockedHosts.add(host);
@@ -300,7 +425,6 @@ public class MainActivity extends AppCompatActivity {
                         response.code(), message, headers, response.body().byteStream());
 
                 } catch (Exception e) {
-                    // חיבור נחסם לגמרי - עבור לפרוקסי
                     if (host != null) blockedHosts.add(host);
                     return fetchViaProxy(url, request);
                 }
@@ -386,9 +510,7 @@ public class MainActivity extends AppCompatActivity {
             if (message == null || message.isEmpty()) message = "OK";
             return new WebResourceResponse(mimeType, "UTF-8",
                 response.code(), message, headers, response.body().byteStream());
-        } catch (Exception e) {
-            return null;
-        }
+        } catch (Exception e) { return null; }
     }
 
     private void injectVideoJsListener(WebView view) {
@@ -468,10 +590,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         for (String u : mediaUrls) {
-            if (u.contains(".m3u8")) {
-                injectHlsIntoVideoJs(u);
-                return;
-            }
+            if (u.contains(".m3u8")) { injectHlsIntoVideoJs(u); return; }
         }
         injectHlsIntoVideoJs("");
     }
@@ -485,6 +604,7 @@ public class MainActivity extends AppCompatActivity {
         popup.getMenu().add(0, 5, 0, "🗑️ נקה Cache");
         popup.getMenu().add(0, 6, 0, "📋 העתק כתובת");
         popup.getMenu().add(0, 7, 0, "🔍 חפש בדף");
+        popup.getMenu().add(0, 8, 0, "➕ הוסף קיצור דרך");
         popup.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
                 case 1: toggleDesktopMode(); break;
@@ -500,16 +620,60 @@ public class MainActivity extends AppCompatActivity {
                     Toast.makeText(this, "✅ כתובת הועתקה!", Toast.LENGTH_SHORT).show();
                     break;
                 case 7: showSearchInPage(); break;
+                case 8: addCurrentPageAsShortcut(); break;
             }
             return true;
         });
         popup.show();
     }
 
+    private void addCurrentPageAsShortcut() {
+        String currentUrl = webView.getUrl();
+        String currentTitle = webView.getTitle();
+        if (currentUrl == null || currentUrl.startsWith(HOME_BASE)) {
+            Toast.makeText(this, "פתח אתר קודם", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("➕ הוסף קיצור דרך");
+        final EditText input = new EditText(this);
+        input.setText(currentTitle != null ? currentTitle : currentUrl);
+        builder.setView(input);
+        final String finalUrl = currentUrl;
+        builder.setPositiveButton("הוסף", (dialog, which) -> {
+            try {
+                String name = input.getText().toString();
+                String saved = prefs.getString("shortcuts", null);
+                JSONArray arr;
+                if (saved != null) {
+                    arr = new JSONArray(saved);
+                } else {
+                    arr = new JSONArray();
+                    for (String[] s : DEFAULT_SHORTCUTS) {
+                        JSONObject obj = new JSONObject();
+                        obj.put("name", s[0]);
+                        obj.put("url", s[1]);
+                        obj.put("emoji", s[2]);
+                        arr.put(obj);
+                    }
+                }
+                JSONObject newShortcut = new JSONObject();
+                newShortcut.put("name", name);
+                newShortcut.put("url", finalUrl);
+                newShortcut.put("emoji", "🌐");
+                arr.put(newShortcut);
+                prefs.edit().putString("shortcuts", arr.toString()).apply();
+                Toast.makeText(this, "✅ קיצור נוסף!", Toast.LENGTH_SHORT).show();
+            } catch (Exception e) { /* ignore */ }
+        });
+        builder.setNegativeButton("ביטול", null);
+        builder.show();
+    }
+
     private void showSearchInPage() {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("🔍 חפש בדף");
-        final android.widget.EditText input = new android.widget.EditText(this);
+        final EditText input = new EditText(this);
         input.setHint("מילת חיפוש...");
         builder.setView(input);
         builder.setPositiveButton("חפש", (dialog, which) -> {
@@ -525,9 +689,14 @@ public class MainActivity extends AppCompatActivity {
         WebSettings settings = webView.getSettings();
         if (isDesktopMode) {
             settings.setUserAgentString(UA_DESKTOP);
+            // בדיוק כמו Chrome - viewport תואם רוחב מסך
+            settings.setUseWideViewPort(false);
+            settings.setLoadWithOverviewMode(false);
             Toast.makeText(this, "🖥️ מצב מחשב פעיל", Toast.LENGTH_SHORT).show();
         } else {
             settings.setUserAgentString(UA_MOBILE);
+            settings.setUseWideViewPort(true);
+            settings.setLoadWithOverviewMode(true);
             Toast.makeText(this, "📱 מצב מובייל", Toast.LENGTH_SHORT).show();
         }
         webView.reload();
@@ -662,4 +831,4 @@ public class MainActivity extends AppCompatActivity {
         if (webView.canGoBack()) webView.goBack();
         else super.onBackPressed();
     }
-}
+    }
