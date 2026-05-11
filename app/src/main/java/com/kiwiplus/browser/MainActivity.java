@@ -35,7 +35,9 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
@@ -56,6 +58,9 @@ public class MainActivity extends AppCompatActivity {
     private boolean isHomePage = false;
     private boolean isDesktopMode = false;
     private boolean hlsInjected = false;
+
+    // אתרים שנחסמו - יעברו דרך פרוקסי
+    private Set<String> blockedHosts = new HashSet<>();
 
     private static final String PROXY_URL = "https://kiwiplus-proxy.onrender.com/";
 
@@ -78,6 +83,7 @@ public class MainActivity extends AppCompatActivity {
     );
 
     private static final String HOME_BASE = "https://kiwiplus.local";
+    private OkHttpClient directClient;
     private OkHttpClient proxyClient;
 
     public class MediaBridge {
@@ -123,6 +129,11 @@ public class MainActivity extends AppCompatActivity {
         splashScreen = findViewById(R.id.splashScreen);
         splashTitle = findViewById(R.id.splashTitle);
         splashSubtitle = findViewById(R.id.splashSubtitle);
+
+        directClient = new OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .build();
 
         proxyClient = new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -203,7 +214,7 @@ public class MainActivity extends AppCompatActivity {
             "  padding:2px 8px; border-radius:20px; font-size:10px; font-weight:700; margin-top:4px; }" +
             "</style></head><body>" +
             "<h1>KiwiPlus 🥝</h1>" +
-            "<p class='subtitle'>browse free · 🔒 פרוקסי מאובטח · 📡 עוקף חסימות</p>" +
+            "<p class='subtitle'>browse free · 🔒 חכם · 📡 עוקף חסימות</p>" +
             "<p class='section-title'>קישורים מהירים</p>" +
             "<div class='grid'>" +
             "<div class='item' onclick=\"go('https://github.com')\"><div class='icon'>🐙</div><div class='label'>GitHub</div></div>" +
@@ -217,7 +228,7 @@ public class MainActivity extends AppCompatActivity {
             "</div>" +
             "<p class='section-title'>מצב</p>" +
             "<div class='card'><div class='row'><div class='cicon'>🛡️</div><div class='ctext'>" +
-            "<h3>פרוקסי פרטי</h3><p>כל הגלישה דרך השרת שלך</p>" +
+            "<h3>פרוקסי חכם</h3><p>ישיר כשאפשר, פרוקסי כשנחסם</p>" +
             "<span class='badge'>🟢 פעיל</span></div></div></div>" +
             "<div class='card'><div class='row'><div class='cicon'>🎬</div><div class='ctext'>" +
             "<h3>זיהוי מדיה אוטומטי</h3><p>Video.js · HLS · Kaltura</p>" +
@@ -249,14 +260,32 @@ public class MainActivity extends AppCompatActivity {
                 if (url.startsWith(HOME_BASE) || url.startsWith(PROXY_URL)) return null;
                 if (!request.getMethod().equals("GET")) return null;
                 if (!url.startsWith("http")) return null;
+
+                String host = request.getUrl().getHost();
+
+                // אם האתר הזה כבר נחסם בעבר - ישר לפרוקסי
+                if (host != null && blockedHosts.contains(host)) {
+                    return fetchViaProxy(url, request);
+                }
+
+                // ניסיון ישיר קודם
                 try {
-                    String proxyTarget = PROXY_URL + url;
-                    Request.Builder reqBuilder = new Request.Builder().url(proxyTarget);
+                    Request.Builder reqBuilder = new Request.Builder().url(url);
                     for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
                         try { reqBuilder.addHeader(header.getKey(), header.getValue()); } catch (Exception ignored) {}
                     }
-                    Response response = proxyClient.newCall(reqBuilder.build()).execute();
+                    Response response = directClient.newCall(reqBuilder.build()).execute();
                     if (response.body() == null) return null;
+
+                    int code = response.code();
+
+                    // אם נחסם (403/302 לדף חסימה) - שמור ועבור לפרוקסי
+                    if (code == 403 || code == 407 || code == 451) {
+                        response.close();
+                        if (host != null) blockedHosts.add(host);
+                        return fetchViaProxy(url, request);
+                    }
+
                     String contentType = response.header("Content-Type", "text/plain");
                     String mimeType = contentType != null && contentType.contains(";")
                         ? contentType.split(";")[0].trim() : contentType;
@@ -265,12 +294,16 @@ public class MainActivity extends AppCompatActivity {
                         String val = response.header(name);
                         if (val != null) headers.put(name, val);
                     }
-                    headers.put("Access-Control-Allow-Origin", "*");
                     String message = response.message();
                     if (message == null || message.isEmpty()) message = "OK";
                     return new WebResourceResponse(mimeType, "UTF-8",
                         response.code(), message, headers, response.body().byteStream());
-                } catch (Exception e) { return null; }
+
+                } catch (Exception e) {
+                    // חיבור נחסם לגמרי - עבור לפרוקסי
+                    if (host != null) blockedHosts.add(host);
+                    return fetchViaProxy(url, request);
+                }
             }
 
             @Override
@@ -329,6 +362,33 @@ public class MainActivity extends AppCompatActivity {
                 recreate();
             }
         });
+    }
+
+    private WebResourceResponse fetchViaProxy(String url, WebResourceRequest request) {
+        try {
+            String proxyTarget = PROXY_URL + url;
+            Request.Builder reqBuilder = new Request.Builder().url(proxyTarget);
+            for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
+                try { reqBuilder.addHeader(header.getKey(), header.getValue()); } catch (Exception ignored) {}
+            }
+            Response response = proxyClient.newCall(reqBuilder.build()).execute();
+            if (response.body() == null) return null;
+            String contentType = response.header("Content-Type", "text/plain");
+            String mimeType = contentType != null && contentType.contains(";")
+                ? contentType.split(";")[0].trim() : contentType;
+            HashMap<String, String> headers = new HashMap<>();
+            for (String name : response.headers().names()) {
+                String val = response.header(name);
+                if (val != null) headers.put(name, val);
+            }
+            headers.put("Access-Control-Allow-Origin", "*");
+            String message = response.message();
+            if (message == null || message.isEmpty()) message = "OK";
+            return new WebResourceResponse(mimeType, "UTF-8",
+                response.code(), message, headers, response.body().byteStream());
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private void injectVideoJsListener(WebView view) {
@@ -602,4 +662,4 @@ public class MainActivity extends AppCompatActivity {
         if (webView.canGoBack()) webView.goBack();
         else super.onBackPressed();
     }
-                        }
+}
