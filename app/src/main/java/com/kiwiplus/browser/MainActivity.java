@@ -230,7 +230,6 @@ public class MainActivity extends AppCompatActivity {
         StringBuilder sb = new StringBuilder();
         String saved = prefs.getString("shortcuts", null);
         String[][] shortcuts = DEFAULT_SHORTCUTS;
-
         if (saved != null) {
             try {
                 JSONArray arr = new JSONArray(saved);
@@ -243,7 +242,6 @@ public class MainActivity extends AppCompatActivity {
                 }
             } catch (Exception e) { /* use defaults */ }
         }
-
         for (String[] s : shortcuts) {
             String domain = "";
             try { domain = Uri.parse(s[1]).getHost(); } catch (Exception e) {}
@@ -263,17 +261,24 @@ public class MainActivity extends AppCompatActivity {
         hlsInjected = false;
         urlBar.setText("");
         urlBar.setHint("חפש או הכנס כתובת");
-
         String shortcuts = buildShortcutsHtml();
-
         String html = "<!DOCTYPE html><html dir='rtl'><head>" +
             "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
             "<style>" +
             "* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }" +
             "body { background:linear-gradient(160deg,#e8f5e0 0%,#f5faf0 60%,#e0f0e8 100%);" +
-            "  font-family:sans-serif; color:#2d4a1e; min-height:100vh; padding:24px 16px 100px; }" +
-            "h1 { font-size:36px; font-weight:900; color:#3a7d1e; margin-bottom:2px; }" +
-            ".subtitle { font-size:12px; color:#7aaa5a; margin-bottom:24px; }" +
+            "  font-family:sans-serif; color:#2d4a1e; min-height:100vh; padding:16px 16px 100px; }" +
+            "h1 { font-size:36px; font-weight:900; color:#3a7d1e; margin-bottom:2px; text-align:center; }" +
+            ".subtitle { font-size:12px; color:#7aaa5a; margin-bottom:16px; text-align:center; }" +
+            ".search-box { display:flex; align-items:center; background:white;" +
+            "  border-radius:24px; box-shadow:0 2px 12px rgba(0,0,0,0.1);" +
+            "  padding:4px 8px 4px 16px; margin-bottom:24px; }" +
+            ".search-box input { flex:1; border:none; outline:none; font-size:16px;" +
+            "  color:#2d4a1e; background:transparent; padding:10px 0; }" +
+            ".search-box input::placeholder { color:#aaa; }" +
+            ".search-btn { width:40px; height:40px; border-radius:50%; background:#3a7d1e;" +
+            "  border:none; cursor:pointer; display:flex; align-items:center; justify-content:center;" +
+            "  font-size:18px; flex-shrink:0; }" +
             ".section-title { font-size:17px; font-weight:700; margin:20px 0 12px; color:#2d4a1e;" +
             "  display:flex; justify-content:space-between; align-items:center; }" +
             ".edit-btn { font-size:12px; color:#7aaa5a; cursor:pointer; padding:4px 8px;" +
@@ -296,8 +301,15 @@ public class MainActivity extends AppCompatActivity {
             ".badge { display:inline-block; background:#e8f5e0; color:#3a7d1e;" +
             "  padding:2px 8px; border-radius:20px; font-size:10px; font-weight:700; margin-top:4px; }" +
             "</style></head><body>" +
+            "<div style='text-align:center; padding-top:24px; margin-bottom:8px;'>" +
             "<h1>KiwiPlus 🥝</h1>" +
             "<p class='subtitle'>browse free · 🔒 חכם · 📡 עוקף חסימות</p>" +
+            "</div>" +
+            "<div class='search-box'>" +
+            "  <input type='text' id='searchInput' placeholder='חפש או הכנס כתובת...' " +
+            "    onkeydown='if(event.key==\"Enter\") doSearch()' />" +
+            "  <button class='search-btn' onclick='doSearch()'>🔍</button>" +
+            "</div>" +
             "<div class='section-title'>" +
             "  <span>קישורים מהירים</span>" +
             "  <span class='edit-btn' onclick='addShortcut()'>+ הוסף</span>" +
@@ -311,6 +323,17 @@ public class MainActivity extends AppCompatActivity {
             "<h3>זיהוי מדיה אוטומטי</h3><p>Video.js · HLS · Kaltura</p>" +
             "<span class='badge'>🟢 Bridge פעיל</span></div></div></div>" +
             "<script>" +
+            "function doSearch() {" +
+            "  var q = document.getElementById('searchInput').value.trim();" +
+            "  if (!q) return;" +
+            "  if (q.startsWith('http://') || q.startsWith('https://')) {" +
+            "    window.location.href = q;" +
+            "  } else if (q.indexOf('.') !== -1 && q.indexOf(' ') === -1) {" +
+            "    window.location.href = 'https://' + q;" +
+            "  } else {" +
+            "    window.location.href = 'https://duckduckgo.com/?q=' + encodeURIComponent(q);" +
+            "  }" +
+            "}" +
             "function go(url){ window.location.href=url; }" +
             "function addShortcut(){" +
             "  var name = prompt('שם הקיצור:');" +
@@ -320,9 +343,9 @@ public class MainActivity extends AppCompatActivity {
             "  if (!url.startsWith('http')) url = 'https://' + url;" +
             "  window.KiwiPlus.addShortcut(name, url);" +
             "}" +
+            "setTimeout(function(){ document.getElementById('searchInput').focus(); }, 300);" +
             "</script>" +
             "</body></html>";
-
         webView.loadDataWithBaseURL(HOME_BASE, html, "text/html", "UTF-8", null);
     }
 
@@ -361,14 +384,12 @@ public class MainActivity extends AppCompatActivity {
                     }
                     Response response = directClient.newCall(reqBuilder.build()).execute();
                     if (response.body() == null) return null;
-
                     int code = response.code();
                     if (code == 403 || code == 407 || code == 451) {
                         response.close();
                         if (host != null) blockedHosts.add(host);
                         return fetchViaProxy(url, request);
                     }
-
                     String contentType = response.header("Content-Type", "text/plain");
                     String mimeType = contentType != null && contentType.contains(";")
                         ? contentType.split(";")[0].trim() : contentType;
@@ -381,7 +402,6 @@ public class MainActivity extends AppCompatActivity {
                     if (message == null || message.isEmpty()) message = "OK";
                     return new WebResourceResponse(mimeType, "UTF-8",
                         response.code(), message, headers, response.body().byteStream());
-
                 } catch (Exception e) {
                     if (host != null) blockedHosts.add(host);
                     return fetchViaProxy(url, request);
@@ -409,6 +429,7 @@ public class MainActivity extends AppCompatActivity {
                 swipeRefresh.setRefreshing(false);
                 injectVideoJsListener(view);
                 injectMediaScanner(view);
+                injectNetworkObserver(view);
             }
 
             @Override
@@ -444,6 +465,53 @@ public class MainActivity extends AppCompatActivity {
                 recreate();
             }
         });
+    }
+
+    // תופס שידורים מרחוק דרך PerformanceObserver
+    private void injectNetworkObserver(WebView view) {
+        String js =
+            "(function() {" +
+            "  if (window._kiwiNetworkObserver) return;" +
+            "  window._kiwiNetworkObserver = true;" +
+            // PerformanceObserver - תופס כל resource שנטען
+            "  try {" +
+            "    var observer = new PerformanceObserver(function(list) {" +
+            "      list.getEntries().forEach(function(entry) {" +
+            "        var url = entry.name;" +
+            "        if (!url || !url.startsWith('http')) return;" +
+            "        var isMedia = /\\.(m3u8|mp4|ts|mp3|webm|ogg|flv|mov|avi)(\\?|$)/i.test(url);" +
+            "        var isStream = /(manifest|playlist|stream|video|audio|media|chunk|segment)/i.test(url);" +
+            "        var isKaltura = /kaltura|entry_id/i.test(url);" +
+            "        if (isMedia || isStream || isKaltura) {" +
+            "          window.KiwiPlus.onMediaFound(url);" +
+            "        }" +
+            "      });" +
+            "    });" +
+            "    observer.observe({ entryTypes: ['resource'] });" +
+            "  } catch(e) {}" +
+            // XMLHttpRequest override - תופס AJAX
+            "  var origOpen = XMLHttpRequest.prototype.open;" +
+            "  XMLHttpRequest.prototype.open = function(method, url) {" +
+            "    if (url && typeof url === 'string') {" +
+            "      var isMedia = /\\.(m3u8|mp4|ts|mp3|webm)(\\?|$)/i.test(url);" +
+            "      var isStream = /(manifest|playlist|stream|hls|dash)/i.test(url);" +
+            "      if (isMedia || isStream) window.KiwiPlus.onMediaFound(url);" +
+            "    }" +
+            "    return origOpen.apply(this, arguments);" +
+            "  };" +
+            // Fetch override - תופס fetch requests
+            "  var origFetch = window.fetch;" +
+            "  window.fetch = function(input, init) {" +
+            "    var url = typeof input === 'string' ? input : (input && input.url);" +
+            "    if (url) {" +
+            "      var isMedia = /\\.(m3u8|mp4|ts|mp3|webm)(\\?|$)/i.test(url);" +
+            "      var isStream = /(manifest|playlist|stream|hls|dash)/i.test(url);" +
+            "      if (isMedia || isStream) window.KiwiPlus.onMediaFound(url);" +
+            "    }" +
+            "    return origFetch.apply(this, arguments);" +
+            "  };" +
+            "})()";
+        view.evaluateJavascript(js, null);
     }
 
     private WebResourceResponse fetchViaProxy(String url, WebResourceRequest request) {
@@ -553,6 +621,36 @@ public class MainActivity extends AppCompatActivity {
         injectHlsIntoVideoJs("");
     }
 
+    private void showViewSource() {
+        String currentUrl = webView.getUrl();
+        if (currentUrl == null || currentUrl.startsWith(HOME_BASE)) {
+            Toast.makeText(this, "פתח אתר קודם", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        webView.evaluateJavascript(
+            "(function() { return document.documentElement.outerHTML; })()",
+            value -> runOnUiThread(() -> {
+                String source = value
+                    .replaceAll("^\"|\"$", "")
+                    .replace("\\n", "\n")
+                    .replace("\\t", "\t")
+                    .replace("\\\"", "\"")
+                    .replace("\\'", "'");
+
+                String sourceHtml = "<!DOCTYPE html><html><head>" +
+                    "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
+                    "<style>" +
+                    "body { background:#1a1a2e; color:#a0d080; font-family:monospace; font-size:11px; padding:12px; white-space:pre-wrap; word-break:break-all; }" +
+                    "</style></head><body>" +
+                    source.replace("<", "&lt;").replace(">", "&gt;") +
+                    "</body></html>";
+
+                webView.loadDataWithBaseURL("https://kiwiplus.source", sourceHtml, "text/html", "UTF-8", null);
+                urlBar.setText("📄 מקור: " + currentUrl);
+            })
+        );
+    }
+
     private void showMenu() {
         PopupMenu popup = new PopupMenu(this, btnMenu);
         popup.getMenu().add(0, 1, 0, isDesktopMode ? "📱 מצב מובייל" : "🖥️ מצב מחשב");
@@ -563,6 +661,7 @@ public class MainActivity extends AppCompatActivity {
         popup.getMenu().add(0, 6, 0, "📋 העתק כתובת");
         popup.getMenu().add(0, 7, 0, "🔍 חפש בדף");
         popup.getMenu().add(0, 8, 0, "➕ הוסף קיצור דרך");
+        popup.getMenu().add(0, 9, 0, "📄 הצג מקור דף");
         popup.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
                 case 1: toggleDesktopMode(); break;
@@ -579,6 +678,7 @@ public class MainActivity extends AppCompatActivity {
                     break;
                 case 7: showSearchInPage(); break;
                 case 8: addCurrentPageAsShortcut(); break;
+                case 9: showViewSource(); break;
             }
             return true;
         });
