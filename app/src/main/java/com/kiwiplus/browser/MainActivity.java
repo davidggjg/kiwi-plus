@@ -1,12 +1,8 @@
 package com.kiwiplus.browser;
 
 import android.app.AlertDialog;
-import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
-import android.net.ConnectivityManager;
-import android.net.Network;
-import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -65,7 +61,6 @@ public class MainActivity extends AppCompatActivity {
     private Set<String> blockedHosts = new HashSet<>();
     private SharedPreferences prefs;
 
-    // קיצורי דרך ברירת מחדל
     private static final String[][] DEFAULT_SHORTCUTS = {
         {"GitHub", "https://github.com", "🐙"},
         {"YouTube", "https://youtube.com", "▶️"},
@@ -83,7 +78,6 @@ public class MainActivity extends AppCompatActivity {
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
 
-    // Desktop UA בדיוק כמו Chrome
     private static final String UA_DESKTOP =
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -124,6 +118,38 @@ public class MainActivity extends AppCompatActivity {
                     }
                 });
             }
+        }
+
+        @JavascriptInterface
+        public void addShortcut(String name, String url) {
+            runOnUiThread(() -> {
+                try {
+                    String saved = prefs.getString("shortcuts", null);
+                    JSONArray arr;
+                    if (saved != null) {
+                        arr = new JSONArray(saved);
+                    } else {
+                        arr = new JSONArray();
+                        for (String[] s : DEFAULT_SHORTCUTS) {
+                            JSONObject obj = new JSONObject();
+                            obj.put("name", s[0]);
+                            obj.put("url", s[1]);
+                            obj.put("emoji", s[2]);
+                            arr.put(obj);
+                        }
+                    }
+                    JSONObject newShortcut = new JSONObject();
+                    newShortcut.put("name", name);
+                    newShortcut.put("url", url);
+                    newShortcut.put("emoji", "🌐");
+                    arr.put(newShortcut);
+                    prefs.edit().putString("shortcuts", arr.toString()).apply();
+                    Toast.makeText(MainActivity.this, "✅ קיצור נוסף!", Toast.LENGTH_SHORT).show();
+                    showHomePage();
+                } catch (Exception e) {
+                    Toast.makeText(MainActivity.this, "שגיאה", Toast.LENGTH_SHORT).show();
+                }
+            });
         }
     }
 
@@ -300,41 +326,6 @@ public class MainActivity extends AppCompatActivity {
         webView.loadDataWithBaseURL(HOME_BASE, html, "text/html", "UTF-8", null);
     }
 
-    // JavaScript Interface - גשר בין JS לJava
-    public class MediaBridge2 {
-        @JavascriptInterface
-        public void addShortcut(String name, String url) {
-            runOnUiThread(() -> {
-                try {
-                    String saved = prefs.getString("shortcuts", null);
-                    JSONArray arr;
-                    if (saved != null) {
-                        arr = new JSONArray(saved);
-                    } else {
-                        arr = new JSONArray();
-                        for (String[] s : DEFAULT_SHORTCUTS) {
-                            JSONObject obj = new JSONObject();
-                            obj.put("name", s[0]);
-                            obj.put("url", s[1]);
-                            obj.put("emoji", s[2]);
-                            arr.put(obj);
-                        }
-                    }
-                    JSONObject newShortcut = new JSONObject();
-                    newShortcut.put("name", name);
-                    newShortcut.put("url", url);
-                    newShortcut.put("emoji", "🌐");
-                    arr.put(newShortcut);
-                    prefs.edit().putString("shortcuts", arr.toString()).apply();
-                    Toast.makeText(this, "✅ קיצור נוסף!", Toast.LENGTH_SHORT).show();
-                    showHomePage();
-                } catch (Exception e) {
-                    Toast.makeText(this, "שגיאה בהוספת קיצור", Toast.LENGTH_SHORT).show();
-                }
-            });
-        }
-    }
-
     private void setupWebView() {
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -348,39 +339,6 @@ public class MainActivity extends AppCompatActivity {
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         settings.setCacheMode(WebSettings.LOAD_CACHE_ELSE_NETWORK);
         settings.setUserAgentString(UA_MOBILE);
-
-        // Bridge להוספת קיצורים
-        webView.addJavascriptInterface(new MediaBridge2() {
-            @JavascriptInterface
-            public void addShortcut(String name, String url) {
-                runOnUiThread(() -> {
-                    try {
-                        String saved = prefs.getString("shortcuts", null);
-                        JSONArray arr;
-                        if (saved != null) {
-                            arr = new JSONArray(saved);
-                        } else {
-                            arr = new JSONArray();
-                            for (String[] s : DEFAULT_SHORTCUTS) {
-                                JSONObject obj = new JSONObject();
-                                obj.put("name", s[0]);
-                                obj.put("url", s[1]);
-                                obj.put("emoji", s[2]);
-                                arr.put(obj);
-                            }
-                        }
-                        JSONObject newShortcut = new JSONObject();
-                        newShortcut.put("name", name);
-                        newShortcut.put("url", url);
-                        newShortcut.put("emoji", "🌐");
-                        arr.put(newShortcut);
-                        prefs.edit().putString("shortcuts", arr.toString()).apply();
-                        Toast.makeText(MainActivity.this, "✅ קיצור נוסף!", Toast.LENGTH_SHORT).show();
-                        showHomePage();
-                    } catch (Exception e) { /* ignore */ }
-                });
-            }
-        }, "KiwiPlus");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -580,7 +538,7 @@ public class MainActivity extends AppCompatActivity {
             "  } else { doInject(); }" +
             "})()";
         webView.evaluateJavascript(js, value ->
-            runOnUiThread(() -> Toast.makeText(this, "🎬 HLS.js הוזרק!", Toast.LENGTH_SHORT).show())
+            runOnUiThread(() -> Toast.makeText(MainActivity.this, "🎬 HLS.js הוזרק!", Toast.LENGTH_SHORT).show())
         );
     }
 
@@ -689,7 +647,6 @@ public class MainActivity extends AppCompatActivity {
         WebSettings settings = webView.getSettings();
         if (isDesktopMode) {
             settings.setUserAgentString(UA_DESKTOP);
-            // בדיוק כמו Chrome - viewport תואם רוחב מסך
             settings.setUseWideViewPort(false);
             settings.setLoadWithOverviewMode(false);
             Toast.makeText(this, "🖥️ מצב מחשב פעיל", Toast.LENGTH_SHORT).show();
@@ -831,4 +788,4 @@ public class MainActivity extends AppCompatActivity {
         if (webView.canGoBack()) webView.goBack();
         else super.onBackPressed();
     }
-    }
+}
