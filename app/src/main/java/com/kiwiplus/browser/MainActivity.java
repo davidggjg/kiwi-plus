@@ -58,6 +58,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean isHomePage = false;
     private boolean isDesktopMode = false;
     private boolean hlsInjected = false;
+    private boolean isSearchResults = false;
     private Set<String> blockedHosts = new HashSet<>();
     private SharedPreferences prefs;
 
@@ -68,11 +69,13 @@ public class MainActivity extends AppCompatActivity {
         {"Reddit", "https://reddit.com", "🤖"},
         {"Instagram", "https://instagram.com", "📸"},
         {"WhatsApp", "https://web.whatsapp.com", "💬"},
-        {"DuckDuckGo", "https://duckduckgo.com", "🔍"},
+        {"כאן 11", "https://www.kan.org.il", "📺"},
         {"Telegram", "https://telegram.org", "✈️"}
     };
 
     private static final String PROXY_URL = "https://kiwiplus-proxy.onrender.com/";
+    private static final String DDG_API = "https://api.duckduckgo.com/?format=json&no_redirect=1&no_html=1&q=";
+    private static final String DDG_SEARCH = "https://duckduckgo.com/html/?q=";
 
     private static final String UA_MOBILE =
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 " +
@@ -92,7 +95,13 @@ public class MainActivity extends AppCompatActivity {
         Pattern.CASE_INSENSITIVE
     );
 
+    private static final Pattern STREAM_PATTERN = Pattern.compile(
+        ".*(manifest|playlist|\\.m3u8|\\.mpd|stream|segment|\\.ts)(\\?.*)?$",
+        Pattern.CASE_INSENSITIVE
+    );
+
     private static final String HOME_BASE = "https://kiwiplus.local";
+    private static final String SEARCH_BASE = "https://kiwiplus.search";
     private OkHttpClient directClient;
     private OkHttpClient proxyClient;
 
@@ -150,6 +159,16 @@ public class MainActivity extends AppCompatActivity {
                     Toast.makeText(MainActivity.this, "שגיאה", Toast.LENGTH_SHORT).show();
                 }
             });
+        }
+
+        @JavascriptInterface
+        public void doSearch(String query) {
+            runOnUiThread(() -> performSearch(query));
+        }
+
+        @JavascriptInterface
+        public void navigate(String url) {
+            runOnUiThread(() -> loadUrl(url));
         }
     }
 
@@ -245,7 +264,7 @@ public class MainActivity extends AppCompatActivity {
         for (String[] s : shortcuts) {
             String domain = "";
             try { domain = Uri.parse(s[1]).getHost(); } catch (Exception e) {}
-            sb.append("<div class='item' onclick=\"go('").append(s[1]).append("')\">");
+            sb.append("<div class='item' onclick=\"KiwiPlus.navigate('").append(s[1]).append("')\">");
             sb.append("<div class='icon'>");
             sb.append("<img src='https://www.google.com/s2/favicons?domain=").append(domain).append("&sz=64' ");
             sb.append("onerror=\"this.style.display='none';this.nextSibling.style.display='flex'\" />");
@@ -258,6 +277,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void showHomePage() {
         isHomePage = true;
+        isSearchResults = false;
         hlsInjected = false;
         urlBar.setText("");
         urlBar.setHint("חפש או הכנס כתובת");
@@ -306,7 +326,7 @@ public class MainActivity extends AppCompatActivity {
             "<p class='subtitle'>browse free · 🔒 חכם · 📡 עוקף חסימות</p>" +
             "</div>" +
             "<div class='search-box'>" +
-            "  <input type='text' id='searchInput' placeholder='חפש או הכנס כתובת...' " +
+            "  <input type='text' id='q' placeholder='חפש או הכנס כתובת...' " +
             "    onkeydown='if(event.key==\"Enter\") doSearch()' />" +
             "  <button class='search-btn' onclick='doSearch()'>🔍</button>" +
             "</div>" +
@@ -314,39 +334,211 @@ public class MainActivity extends AppCompatActivity {
             "  <span>קישורים מהירים</span>" +
             "  <span class='edit-btn' onclick='addShortcut()'>+ הוסף</span>" +
             "</div>" +
-            "<div class='grid' id='shortcuts'>" + shortcuts + "</div>" +
+            "<div class='grid'>" + shortcuts + "</div>" +
             "<p class='section-title'>מצב</p>" +
             "<div class='card'><div class='row'><div class='cicon'>🛡️</div><div class='ctext'>" +
             "<h3>פרוקסי חכם</h3><p>ישיר כשאפשר, פרוקסי כשנחסם</p>" +
             "<span class='badge'>🟢 פעיל</span></div></div></div>" +
             "<div class='card'><div class='row'><div class='cicon'>🎬</div><div class='ctext'>" +
-            "<h3>זיהוי מדיה אוטומטי</h3><p>Video.js · HLS · Kaltura</p>" +
-            "<span class='badge'>🟢 Bridge פעיל</span></div></div></div>" +
+            "<h3>זיהוי שידורים</h3><p>תופס קישורי מדיה מוסתרים אוטומטית</p>" +
+            "<span class='badge'>🟢 פעיל</span></div></div></div>" +
             "<script>" +
             "function doSearch() {" +
-            "  var q = document.getElementById('searchInput').value.trim();" +
+            "  var q = document.getElementById('q').value.trim();" +
             "  if (!q) return;" +
-            "  if (q.startsWith('http://') || q.startsWith('https://')) {" +
-            "    window.location.href = q;" +
-            "  } else if (q.indexOf('.') !== -1 && q.indexOf(' ') === -1) {" +
-            "    window.location.href = 'https://' + q;" +
-            "  } else {" +
-            "    window.location.href = 'https://duckduckgo.com/?q=' + encodeURIComponent(q);" +
-            "  }" +
+            "  KiwiPlus.doSearch(q);" +
             "}" +
-            "function go(url){ window.location.href=url; }" +
             "function addShortcut(){" +
             "  var name = prompt('שם הקיצור:');" +
             "  if (!name) return;" +
             "  var url = prompt('כתובת האתר:');" +
             "  if (!url) return;" +
             "  if (!url.startsWith('http')) url = 'https://' + url;" +
-            "  window.KiwiPlus.addShortcut(name, url);" +
+            "  KiwiPlus.addShortcut(name, url);" +
             "}" +
-            "setTimeout(function(){ document.getElementById('searchInput').focus(); }, 300);" +
-            "</script>" +
-            "</body></html>";
+            "setTimeout(function(){ document.getElementById('q').focus(); }, 300);" +
+            "</script></body></html>";
         webView.loadDataWithBaseURL(HOME_BASE, html, "text/html", "UTF-8", null);
+    }
+
+    private void performSearch(String query) {
+        query = query.trim();
+        if (query.startsWith("http://") || query.startsWith("https://")) {
+            loadUrl(query);
+            return;
+        }
+        if (query.contains(".") && !query.contains(" ")) {
+            loadUrl("https://" + query);
+            return;
+        }
+
+        // חיפוש - הצג תוצאות בעיצוב שלנו
+        isSearchResults = true;
+        isHomePage = false;
+        final String finalQuery = query;
+        urlBar.setText("🔍 " + query);
+
+        // הצג loading
+        String loadingHtml = buildSearchLoadingHtml(query);
+        webView.loadDataWithBaseURL(SEARCH_BASE, loadingHtml, "text/html", "UTF-8", null);
+
+        // חפש ב-background
+        new Thread(() -> {
+            try {
+                String encodedQuery = Uri.encode(finalQuery);
+                // שלוף תוצאות מ-DuckDuckGo HTML
+                Request request = new Request.Builder()
+                    .url(DDG_SEARCH + encodedQuery)
+                    .header("User-Agent", UA_MOBILE)
+                    .header("Accept-Language", "he-IL,he;q=0.9,en;q=0.8")
+                    .build();
+
+                Response response = directClient.newCall(request).execute();
+                String body = response.body() != null ? response.body().string() : "";
+
+                // פרסר תוצאות מה-HTML של DDG
+                List<String[]> results = parseDDGResults(body);
+
+                runOnUiThread(() -> {
+                    String html = buildSearchResultsHtml(finalQuery, results);
+                    webView.loadDataWithBaseURL(SEARCH_BASE, html, "text/html", "UTF-8", null);
+                });
+
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    // fallback - פתח DDG ישירות
+                    isSearchResults = false;
+                    webView.loadUrl(DDG_SEARCH + Uri.encode(finalQuery));
+                });
+            }
+        }).start();
+    }
+
+    private List<String[]> parseDDGResults(String html) {
+        List<String[]> results = new ArrayList<>();
+        try {
+            // חיפוש תוצאות בHTML של DDG
+            // כל תוצאה נראית כך: <a class="result__a" href="...">title</a>
+            java.util.regex.Pattern linkPattern = java.util.regex.Pattern.compile(
+                "<a class=\"result__a\"[^>]*href=\"([^\"]+)\"[^>]*>([^<]+)</a>",
+                java.util.regex.Pattern.CASE_INSENSITIVE
+            );
+            java.util.regex.Matcher matcher = linkPattern.matcher(html);
+
+            java.util.regex.Pattern snippetPattern = java.util.regex.Pattern.compile(
+                "<a class=\"result__snippet\"[^>]*>([^<]+)</a>",
+                java.util.regex.Pattern.CASE_INSENSITIVE
+            );
+            java.util.regex.Matcher snippetMatcher = snippetPattern.matcher(html);
+
+            List<String> snippets = new ArrayList<>();
+            while (snippetMatcher.find()) {
+                snippets.add(snippetMatcher.group(1).trim());
+            }
+
+            int i = 0;
+            while (matcher.find() && results.size() < 10) {
+                String url = matcher.group(1);
+                String title = matcher.group(2).trim();
+                String snippet = i < snippets.size() ? snippets.get(i) : "";
+                if (url != null && !url.startsWith("//duckduckgo")) {
+                    if (url.startsWith("/l/?")) {
+                        // DDG redirect URL - חלץ את ה-URL האמיתי
+                        int uddIdx = url.indexOf("uddg=");
+                        if (uddIdx != -1) {
+                            url = Uri.decode(url.substring(uddIdx + 5));
+                            int ampIdx = url.indexOf("&");
+                            if (ampIdx != -1) url = url.substring(0, ampIdx);
+                        }
+                    }
+                    results.add(new String[]{title, url, snippet});
+                    i++;
+                }
+            }
+        } catch (Exception e) { /* ignore */ }
+        return results;
+    }
+
+    private String buildSearchLoadingHtml(String query) {
+        return "<!DOCTYPE html><html dir='rtl'><head>" +
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
+            "<style>" +
+            "* { margin:0; padding:0; box-sizing:border-box; }" +
+            "body { background:#f5faf0; font-family:sans-serif; padding:16px; }" +
+            ".header { display:flex; align-items:center; gap:12px; margin-bottom:20px; }" +
+            ".logo { font-size:24px; font-weight:900; color:#3a7d1e; }" +
+            ".query { color:#666; font-size:14px; }" +
+            ".loading { display:flex; flex-direction:column; align-items:center; margin-top:60px; gap:16px; }" +
+            ".dots { display:flex; gap:8px; }" +
+            ".dot { width:10px; height:10px; border-radius:50%; background:#3a7d1e;" +
+            "  animation:pulse 1.4s infinite ease-in-out; }" +
+            ".dot:nth-child(2){animation-delay:.2s}.dot:nth-child(3){animation-delay:.4s}" +
+            "@keyframes pulse{0%,80%,100%{transform:scale(.6);opacity:.4}40%{transform:scale(1);opacity:1}}" +
+            "</style></head><body>" +
+            "<div class='header'><span class='logo'>KiwiPlus 🥝</span>" +
+            "<span class='query'>מחפש: " + query + "</span></div>" +
+            "<div class='loading'><div class='dots'>" +
+            "<div class='dot'></div><div class='dot'></div><div class='dot'></div>" +
+            "</div><p style='color:#666;font-size:14px;'>מחפש...</p></div>" +
+            "</body></html>";
+    }
+
+    private String buildSearchResultsHtml(String query, List<String[]> results) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("<!DOCTYPE html><html dir='rtl'><head>")
+          .append("<meta name='viewport' content='width=device-width, initial-scale=1'>")
+          .append("<style>")
+          .append("* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }")
+          .append("body { background:#f5faf0; font-family:sans-serif; padding:16px 16px 80px; }")
+          .append(".header { display:flex; align-items:center; gap:8px; margin-bottom:16px; padding-bottom:12px; border-bottom:2px solid #e0f0e0; }")
+          .append(".logo { font-size:22px; font-weight:900; color:#3a7d1e; }")
+          .append(".search-row { flex:1; display:flex; background:white; border-radius:20px; padding:6px 12px; box-shadow:0 1px 6px rgba(0,0,0,0.1); }")
+          .append(".search-row input { flex:1; border:none; outline:none; font-size:14px; color:#333; background:transparent; }")
+          .append(".search-row button { background:none; border:none; cursor:pointer; font-size:16px; }")
+          .append(".result { background:white; border-radius:12px; padding:14px; margin-bottom:10px; box-shadow:0 1px 6px rgba(0,0,0,0.06); cursor:pointer; }")
+          .append(".result:active { background:#f0f9f0; }")
+          .append(".result-title { font-size:16px; font-weight:600; color:#1a0dab; margin-bottom:4px; }")
+          .append(".result-url { font-size:11px; color:#3a7d1e; margin-bottom:6px; }")
+          .append(".result-snippet { font-size:13px; color:#555; line-height:1.4; }")
+          .append(".no-results { text-align:center; margin-top:40px; color:#888; }")
+          .append(".count { font-size:12px; color:#888; margin-bottom:12px; }")
+          .append("</style></head><body>")
+          .append("<div class='header'>")
+          .append("<span class='logo'>🥝</span>")
+          .append("<div class='search-row'>")
+          .append("<input type='text' id='q' value='").append(query.replace("'", "\\'")).append("' onkeydown='if(event.key==\"Enter\") doSearch()' />")
+          .append("<button onclick='doSearch()'>🔍</button>")
+          .append("</div></div>");
+
+        if (results.isEmpty()) {
+            sb.append("<div class='no-results'>")
+              .append("<p style='font-size:40px;margin-bottom:12px;'>🔍</p>")
+              .append("<p>לא נמצאו תוצאות</p>")
+              .append("</div>");
+        } else {
+            sb.append("<p class='count'>").append(results.size()).append(" תוצאות</p>");
+            for (String[] r : results) {
+                String title = r[0];
+                String url = r[1];
+                String snippet = r[2];
+                String displayUrl = url.length() > 50 ? url.substring(0, 50) + "..." : url;
+                sb.append("<div class='result' onclick=\"KiwiPlus.navigate('")
+                  .append(url.replace("'", "\\'")).append("')\">")
+                  .append("<div class='result-title'>").append(title).append("</div>")
+                  .append("<div class='result-url'>").append(displayUrl).append("</div>")
+                  .append("<div class='result-snippet'>").append(snippet).append("</div>")
+                  .append("</div>");
+            }
+        }
+
+        sb.append("<script>")
+          .append("function doSearch() {")
+          .append("  var q = document.getElementById('q').value.trim();")
+          .append("  if (q) KiwiPlus.doSearch(q);")
+          .append("}")
+          .append("</script></body></html>");
+
+        return sb.toString();
     }
 
     private void setupWebView() {
@@ -368,7 +560,7 @@ public class MainActivity extends AppCompatActivity {
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
                 checkForMedia(url);
-                if (url.startsWith(HOME_BASE) || url.startsWith(PROXY_URL)) return null;
+                if (url.startsWith(HOME_BASE) || url.startsWith(SEARCH_BASE) || url.startsWith(PROXY_URL)) return null;
                 if (!request.getMethod().equals("GET")) return null;
                 if (!url.startsWith("http")) return null;
 
@@ -410,17 +602,22 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
-                if (isHomePage || url.startsWith(HOME_BASE)) return;
+                if (isHomePage || isSearchResults || url.startsWith(HOME_BASE) || url.startsWith(SEARCH_BASE)) return;
                 mediaUrls.clear();
                 hlsInjected = false;
                 updateMediaButton(false);
                 progressBar.setVisibility(View.VISIBLE);
                 urlBar.setText(url);
+                // הזרק network observer מוקדם - לפני שהדף נטען!
+                injectEarlyNetworkObserver(view);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                if (url.startsWith(HOME_BASE)) { isHomePage = false; return; }
+                if (url.startsWith(HOME_BASE) || url.startsWith(SEARCH_BASE)) {
+                    isHomePage = url.startsWith(HOME_BASE);
+                    return;
+                }
                 if (isHomePage) { isHomePage = false; return; }
                 progressBar.setVisibility(View.GONE);
                 urlBar.setText(url);
@@ -429,7 +626,6 @@ public class MainActivity extends AppCompatActivity {
                 swipeRefresh.setRefreshing(false);
                 injectVideoJsListener(view);
                 injectMediaScanner(view);
-                injectNetworkObserver(view);
             }
 
             @Override
@@ -467,49 +663,56 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    // תופס שידורים מרחוק דרך PerformanceObserver
-    private void injectNetworkObserver(WebView view) {
+    // מזריק observer מוקדם - לפני שהדף מתחיל לטעון
+    private void injectEarlyNetworkObserver(WebView view) {
         String js =
             "(function() {" +
-            "  if (window._kiwiNetworkObserver) return;" +
-            "  window._kiwiNetworkObserver = true;" +
-            // PerformanceObserver - תופס כל resource שנטען
+            "  if (window._kiwiEarlyObserver) return;" +
+            "  window._kiwiEarlyObserver = true;" +
+            // XMLHttpRequest - תופס AJAX
+            "  var origOpen = XMLHttpRequest.prototype.open;" +
+            "  XMLHttpRequest.prototype.open = function(method, url) {" +
+            "    if (url && typeof url === 'string') {" +
+            "      var isMedia = /\\.(m3u8|mp4|ts|mp3|webm|mpd)(\\?|$)/i.test(url);" +
+            "      var isStream = /(manifest|playlist|stream|hls|dash|segment|chunk)/i.test(url);" +
+            "      var isKaltura = /kaltura|entry_id/i.test(url);" +
+            "      if (isMedia || isStream || isKaltura) window.KiwiPlus.onMediaFound(url);" +
+            "    }" +
+            "    return origOpen.apply(this, arguments);" +
+            "  };" +
+            // Fetch - תופס fetch requests
+            "  var origFetch = window.fetch;" +
+            "  window.fetch = function(input, init) {" +
+            "    var url = typeof input === 'string' ? input : (input && input.url ? input.url : '');" +
+            "    if (url) {" +
+            "      var isMedia = /\\.(m3u8|mp4|ts|mp3|webm|mpd)(\\?|$)/i.test(url);" +
+            "      var isStream = /(manifest|playlist|stream|hls|dash|segment|chunk)/i.test(url);" +
+            "      var isKaltura = /kaltura|entry_id/i.test(url);" +
+            "      if (isMedia || isStream || isKaltura) window.KiwiPlus.onMediaFound(url);" +
+            "    }" +
+            "    return origFetch.apply(this, arguments);" +
+            "  };" +
+            // WebSocket - תופס websocket streams
+            "  var origWS = window.WebSocket;" +
+            "  window.WebSocket = function(url, protocols) {" +
+            "    if (url && /(stream|video|media|live)/i.test(url)) {" +
+            "      window.KiwiPlus.onMediaFound(url);" +
+            "    }" +
+            "    return protocols ? new origWS(url, protocols) : new origWS(url);" +
+            "  };" +
+            // PerformanceObserver - תופס resources שנטענו
             "  try {" +
             "    var observer = new PerformanceObserver(function(list) {" +
             "      list.getEntries().forEach(function(entry) {" +
             "        var url = entry.name;" +
             "        if (!url || !url.startsWith('http')) return;" +
-            "        var isMedia = /\\.(m3u8|mp4|ts|mp3|webm|ogg|flv|mov|avi)(\\?|$)/i.test(url);" +
-            "        var isStream = /(manifest|playlist|stream|video|audio|media|chunk|segment)/i.test(url);" +
-            "        var isKaltura = /kaltura|entry_id/i.test(url);" +
-            "        if (isMedia || isStream || isKaltura) {" +
-            "          window.KiwiPlus.onMediaFound(url);" +
-            "        }" +
+            "        var isMedia = /\\.(m3u8|mp4|ts|mp3|webm|mpd)(\\?|$)/i.test(url);" +
+            "        var isStream = /(manifest|playlist|stream|hls|dash|segment|chunk)/i.test(url);" +
+            "        if (isMedia || isStream) window.KiwiPlus.onMediaFound(url);" +
             "      });" +
             "    });" +
             "    observer.observe({ entryTypes: ['resource'] });" +
             "  } catch(e) {}" +
-            // XMLHttpRequest override - תופס AJAX
-            "  var origOpen = XMLHttpRequest.prototype.open;" +
-            "  XMLHttpRequest.prototype.open = function(method, url) {" +
-            "    if (url && typeof url === 'string') {" +
-            "      var isMedia = /\\.(m3u8|mp4|ts|mp3|webm)(\\?|$)/i.test(url);" +
-            "      var isStream = /(manifest|playlist|stream|hls|dash)/i.test(url);" +
-            "      if (isMedia || isStream) window.KiwiPlus.onMediaFound(url);" +
-            "    }" +
-            "    return origOpen.apply(this, arguments);" +
-            "  };" +
-            // Fetch override - תופס fetch requests
-            "  var origFetch = window.fetch;" +
-            "  window.fetch = function(input, init) {" +
-            "    var url = typeof input === 'string' ? input : (input && input.url);" +
-            "    if (url) {" +
-            "      var isMedia = /\\.(m3u8|mp4|ts|mp3|webm)(\\?|$)/i.test(url);" +
-            "      var isStream = /(manifest|playlist|stream|hls|dash)/i.test(url);" +
-            "      if (isMedia || isStream) window.KiwiPlus.onMediaFound(url);" +
-            "    }" +
-            "    return origFetch.apply(this, arguments);" +
-            "  };" +
             "})()";
         view.evaluateJavascript(js, null);
     }
@@ -623,7 +826,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void showViewSource() {
         String currentUrl = webView.getUrl();
-        if (currentUrl == null || currentUrl.startsWith(HOME_BASE)) {
+        if (currentUrl == null || currentUrl.startsWith(HOME_BASE) || currentUrl.startsWith(SEARCH_BASE)) {
             Toast.makeText(this, "פתח אתר קודם", Toast.LENGTH_SHORT).show();
             return;
         }
@@ -636,17 +839,12 @@ public class MainActivity extends AppCompatActivity {
                     .replace("\\t", "\t")
                     .replace("\\\"", "\"")
                     .replace("\\'", "'");
-
                 String sourceHtml = "<!DOCTYPE html><html><head>" +
                     "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
-                    "<style>" +
-                    "body { background:#1a1a2e; color:#a0d080; font-family:monospace; font-size:11px; padding:12px; white-space:pre-wrap; word-break:break-all; }" +
-                    "</style></head><body>" +
-                    source.replace("<", "&lt;").replace(">", "&gt;") +
-                    "</body></html>";
-
+                    "<style>body { background:#1a1a2e; color:#a0d080; font-family:monospace; font-size:11px; padding:12px; white-space:pre-wrap; word-break:break-all; }</style>" +
+                    "</head><body>" + source.replace("<", "&lt;").replace(">", "&gt;") + "</body></html>";
                 webView.loadDataWithBaseURL("https://kiwiplus.source", sourceHtml, "text/html", "UTF-8", null);
-                urlBar.setText("📄 מקור: " + currentUrl);
+                urlBar.setText("📄 מקור דף");
             })
         );
     }
@@ -688,7 +886,7 @@ public class MainActivity extends AppCompatActivity {
     private void addCurrentPageAsShortcut() {
         String currentUrl = webView.getUrl();
         String currentTitle = webView.getTitle();
-        if (currentUrl == null || currentUrl.startsWith(HOME_BASE)) {
+        if (currentUrl == null || currentUrl.startsWith(HOME_BASE) || currentUrl.startsWith(SEARCH_BASE)) {
             Toast.makeText(this, "פתח אתר קודם", Toast.LENGTH_SHORT).show();
             return;
         }
@@ -778,7 +976,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void checkForMedia(String url) {
-        if (MEDIA_PATTERN.matcher(url).matches() || KALTURA_PATTERN.matcher(url).matches()) {
+        if (MEDIA_PATTERN.matcher(url).matches() || KALTURA_PATTERN.matcher(url).matches() ||
+            STREAM_PATTERN.matcher(url).matches()) {
             if (!mediaUrls.contains(url)) {
                 mediaUrls.add(url);
                 runOnUiThread(() -> updateMediaButton(true));
@@ -862,7 +1061,7 @@ public class MainActivity extends AppCompatActivity {
         urlBar.setOnEditorActionListener((v, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_GO ||
                 (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
-                loadUrl(urlBar.getText().toString().trim());
+                performSearch(urlBar.getText().toString().trim());
                 return true;
             }
             return false;
@@ -872,13 +1071,15 @@ public class MainActivity extends AppCompatActivity {
     private void loadUrl(String input) {
         input = input.trim();
         isHomePage = false;
+        isSearchResults = false;
         String url;
         if (input.startsWith("http://") || input.startsWith("https://")) {
             url = input;
         } else if (input.contains(".") && !input.contains(" ")) {
             url = "https://" + input;
         } else {
-            url = "https://duckduckgo.com/?q=" + Uri.encode(input);
+            performSearch(input);
+            return;
         }
         webView.loadUrl(url);
     }
