@@ -960,17 +960,57 @@ public class MainActivity extends AppCompatActivity {
     private void injectMediaScanner(WebView view) {
         String js =
             "(function() {" +
+            "  var urls = [];" +
+            // סריקת video/audio elements
             "  document.querySelectorAll('video, audio, source').forEach(function(el) {" +
-            "    if (el.src && el.src.startsWith('http')) window.KiwiPlus.onMediaFound(el.src);" +
-            "    if (el.currentSrc && el.currentSrc.startsWith('http')) window.KiwiPlus.onMediaFound(el.currentSrc);" +
+            "    if (el.src && el.src.startsWith('http')) urls.push(el.src);" +
+            "    if (el.currentSrc && el.currentSrc.startsWith('http')) urls.push(el.currentSrc);" +
             "  });" +
             "  var h = document.documentElement.innerHTML;" +
+            // סריקת m3u8 ישיר
             "  var m3u = h.match(/https?:[^'\"\\s\\\\]+\\.m3u8[^'\"\\s\\\\]*/g);" +
-            "  if (m3u) m3u.forEach(function(u) { window.KiwiPlus.onMediaFound(u); });" +
-            "  var km = h.match(/entry_id[^a-zA-Z0-9_]*([a-zA-Z0-9_]{5,})/g);" +
-            "  if (km) km.forEach(function(m) {" +
-            "    window.KiwiPlus.onMediaFound('kaltura:entry_id=' + m.replace(/entry_id[^a-zA-Z0-9_]*/, ''));" +
+            "  if (m3u) m3u.forEach(function(u) { urls.push(u); });" +
+            // סריקת Kaltura - מוצא partner_id + entry_id ובונה URL מלא
+            "  var partnerId = null;" +
+            "  var entryId = null;" +
+            // חיפוש partner_id
+            "  var pm = h.match(/['\"]?partner_?[Ii]d['\"]?\\s*[:=,]\\s*['\"]?(\\d{4,})/i);" +
+            "  if (!pm) pm = h.match(/\\/p\\/(\\d{4,})\\//i);" +
+            "  if (!pm) pm = h.match(/partnerId[^0-9]*(\\d{4,})/i);" +
+            "  if (pm) partnerId = pm[1];" +
+            // חיפוש entry_id
+            "  var em = h.match(/entry_?[Ii]d[^a-zA-Z0-9_]*([01][_][a-zA-Z0-9]+)/i);" +
+            "  if (!em) em = h.match(/entryId[^a-zA-Z0-9_]*([01][_][a-zA-Z0-9]+)/i);" +
+            "  if (em) entryId = em[1];" +
+            // בניית URL מלא של Kaltura
+            "  if (partnerId && entryId) {" +
+            "    var kUrl = 'https://cdnapisec.kaltura.com/p/' + partnerId +" +
+            "      '/sp/' + partnerId + '00/playManifest/entryId/' + entryId +" +
+            "      '/format/applehttp/protocol/https/a.m3u8';" +
+            "    urls.push(kUrl);" +
+            "    window.KiwiPlus.onMediaFound(kUrl);" +
+            "  } else if (entryId) {" +
+            // אם יש רק entry_id בלי partner_id
+            "    window.KiwiPlus.onMediaFound('kaltura:entry_id=' + entryId);" +
+            "  }" +
+            // חיפוש iframes של Kaltura
+            "  document.querySelectorAll('iframe').forEach(function(el) {" +
+            "    var src = el.src || '';" +
+            "    if (src.indexOf('kaltura') !== -1 || src.indexOf('entry_id') !== -1) {" +
+            "      urls.push(src);" +
+            // ניסיון לחלץ partner_id ו-entry_id מה-iframe src
+            "      var ipm = src.match(/\\/p\\/(\\d{4,})/);" +
+            "      var iem = src.match(/entry_?[Ii]d[=\\/]([01][_][a-zA-Z0-9]+)/);" +
+            "      if (ipm && iem) {" +
+            "        var ikUrl = 'https://cdnapisec.kaltura.com/p/' + ipm[1] +" +
+            "          '/sp/' + ipm[1] + '00/playManifest/entryId/' + iem[1] +" +
+            "          '/format/applehttp/protocol/https/a.m3u8';" +
+            "        window.KiwiPlus.onMediaFound(ikUrl);" +
+            "      }" +
+            "    }" +
             "  });" +
+            "  urls.filter(function(v,i,a){ return v && a.indexOf(v)===i; })" +
+            "    .forEach(function(u) { window.KiwiPlus.onMediaFound(u); });" +
             "})()";
         view.evaluateJavascript(js, null);
     }
