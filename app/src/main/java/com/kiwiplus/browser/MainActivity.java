@@ -91,7 +91,7 @@ public class MainActivity extends AppCompatActivity {
     );
 
     private static final Pattern KALTURA_PATTERN = Pattern.compile(
-        ".*(kaltura\\.com|cdnapisec\\.kaltura\\.com).*entry_id=([a-zA-Z0-9_]+).*",
+        ".*(kaltura\\.com|cdnapisec\\.kaltura\\.com).*(entry_id|entryId|playManifest|a\\.m3u8).*",
         Pattern.CASE_INSENSITIVE
     );
 
@@ -372,92 +372,136 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        // חיפוש - הצג תוצאות בעיצוב שלנו
         isSearchResults = true;
         isHomePage = false;
         final String finalQuery = query;
         urlBar.setText("🔍 " + query);
 
-        // הצג loading
-        String loadingHtml = buildSearchLoadingHtml(query);
-        webView.loadDataWithBaseURL(SEARCH_BASE, loadingHtml, "text/html", "UTF-8", null);
+        webView.loadDataWithBaseURL(SEARCH_BASE, buildSearchLoadingHtml(query), "text/html", "UTF-8", null);
 
-        // חפש ב-background
         new Thread(() -> {
             try {
                 String encodedQuery = Uri.encode(finalQuery);
-                // שלוף תוצאות מ-DuckDuckGo HTML
-                Request request = new Request.Builder()
-                    .url(DDG_SEARCH + encodedQuery)
-                    .header("User-Agent", UA_MOBILE)
-                    .header("Accept-Language", "he-IL,he;q=0.9,en;q=0.8")
+
+                // ניסיון 1 - DDG JSON API
+                Request req1 = new Request.Builder()
+                    .url("https://api.duckduckgo.com/?q=" + encodedQuery + "&format=json&no_redirect=1&no_html=1&skip_disambig=1")
+                    .header("User-Agent", "Mozilla/5.0")
                     .build();
+                Response res1 = directClient.newCall(req1).execute();
+                String body1 = res1.body() != null ? res1.body().string() : "{}";
+                List<String[]> results = parseDDGJson(body1, finalQuery);
 
-                Response response = directClient.newCall(request).execute();
-                String body = response.body() != null ? response.body().string() : "";
+                // ניסיון 2 - DDG Lite אם אין תוצאות
+                if (results.isEmpty()) {
+                    Request req2 = new Request.Builder()
+                        .url("https://lite.duckduckgo.com/lite/?q=" + encodedQuery)
+                        .header("User-Agent", "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")
+                        .build();
+                    Response res2 = directClient.newCall(req2).execute();
+                    String body2 = res2.body() != null ? res2.body().string() : "";
+                    results = parseDDGLite(body2);
+                }
 
-                // פרסר תוצאות מה-HTML של DDG
-                List<String[]> results = parseDDGResults(body);
-
+                final List<String[]> finalResults = results;
                 runOnUiThread(() -> {
-                    String html = buildSearchResultsHtml(finalQuery, results);
-                    webView.loadDataWithBaseURL(SEARCH_BASE, html, "text/html", "UTF-8", null);
+                    if (finalResults.isEmpty()) {
+                        isSearchResults = false;
+                        webView.loadUrl("https://duckduckgo.com/?q=" + Uri.encode(finalQuery));
+                    } else {
+                        webView.loadDataWithBaseURL(SEARCH_BASE,
+                            buildSearchResultsHtml(finalQuery, finalResults),
+                            "text/html", "UTF-8", null);
+                    }
                 });
 
             } catch (Exception e) {
                 runOnUiThread(() -> {
-                    // fallback - פתח DDG ישירות
                     isSearchResults = false;
-                    webView.loadUrl(DDG_SEARCH + Uri.encode(finalQuery));
+                    webView.loadUrl("https://duckduckgo.com/?q=" + Uri.encode(finalQuery));
                 });
             }
         }).start();
     }
 
-    private List<String[]> parseDDGResults(String html) {
+    private List<String[]> parseDDGJson(String json, String query) {
         List<String[]> results = new ArrayList<>();
         try {
-            // חיפוש תוצאות בHTML של DDG
-            // כל תוצאה נראית כך: <a class="result__a" href="...">title</a>
-            java.util.regex.Pattern linkPattern = java.util.regex.Pattern.compile(
-                "<a class=\"result__a\"[^>]*href=\"([^\"]+)\"[^>]*>([^<]+)</a>",
-                java.util.regex.Pattern.CASE_INSENSITIVE
-            );
-            java.util.regex.Matcher matcher = linkPattern.matcher(html);
+            JSONObject obj = new JSONObject(json);
 
-            java.util.regex.Pattern snippetPattern = java.util.regex.Pattern.compile(
-                "<a class=\"result__snippet\"[^>]*>([^<]+)</a>",
-                java.util.regex.Pattern.CASE_INSENSITIVE
-            );
-            java.util.regex.Matcher snippetMatcher = snippetPattern.matcher(html);
-
-            List<String> snippets = new ArrayList<>();
-            while (snippetMatcher.find()) {
-                snippets.add(snippetMatcher.group(1).trim());
+            // Abstract
+            String abstractText = obj.optString("AbstractText", "");
+            String abstractUrl = obj.optString("AbstractURL", "");
+            String abstractSource = obj.optString("AbstractSource", "");
+            if (!abstractText.isEmpty() && !abstractUrl.isEmpty()) {
+                results.add(new String[]{abstractSource.isEmpty() ? query : abstractSource, abstractUrl, abstractText});
             }
 
-            int i = 0;
-            while (matcher.find() && results.size() < 10) {
-                String url = matcher.group(1);
-                String title = matcher.group(2).trim();
-                String snippet = i < snippets.size() ? snippets.get(i) : "";
-                if (url != null && !url.startsWith("//duckduckgo")) {
-                    if (url.startsWith("/l/?")) {
-                        // DDG redirect URL - חלץ את ה-URL האמיתי
-                        int uddIdx = url.indexOf("uddg=");
-                        if (uddIdx != -1) {
-                            url = Uri.decode(url.substring(uddIdx + 5));
-                            int ampIdx = url.indexOf("&");
-                            if (ampIdx != -1) url = url.substring(0, ampIdx);
+            // Answer
+            String answer = obj.optString("Answer", "");
+            String answerType = obj.optString("AnswerType", "");
+            if (!answer.isEmpty()) {
+                results.add(new String[]{"תשובה מיידית", "https://duckduckgo.com/?q=" + Uri.encode(query), answer});
+            }
+
+            // RelatedTopics
+            JSONArray topics = obj.optJSONArray("RelatedTopics");
+            if (topics != null) {
+                for (int i = 0; i < topics.length() && results.size() < 8; i++) {
+                    try {
+                        JSONObject topic = topics.getJSONObject(i);
+                        String url = topic.optString("FirstURL", "");
+                        String text = topic.optString("Text", "");
+                        if (!url.isEmpty() && !text.isEmpty()) {
+                            String title = text.length() > 80 ? text.substring(0, 80) + "..." : text;
+                            results.add(new String[]{title, url, text});
                         }
-                    }
-                    results.add(new String[]{title, url, snippet});
-                    i++;
+                    } catch (Exception ignored) {}
+                }
+            }
+
+            // Results
+            JSONArray ddgResults = obj.optJSONArray("Results");
+            if (ddgResults != null) {
+                for (int i = 0; i < ddgResults.length() && results.size() < 10; i++) {
+                    try {
+                        JSONObject r = ddgResults.getJSONObject(i);
+                        String url = r.optString("FirstURL", "");
+                        String text = r.optString("Text", "");
+                        if (!url.isEmpty() && !text.isEmpty()) {
+                            results.add(new String[]{text, url, ""});
+                        }
+                    } catch (Exception ignored) {}
                 }
             }
         } catch (Exception e) { /* ignore */ }
         return results;
     }
+
+    private List<String[]> parseDDGLite(String html) {
+        List<String[]> results = new ArrayList<>();
+        try {
+            java.util.regex.Pattern p = java.util.regex.Pattern.compile(
+                "<a[^>]+href="(https?://(?!.*duckduckgo)[^"]+)"[^>]*>([^<]{3,100})</a>",
+                java.util.regex.Pattern.CASE_INSENSITIVE
+            );
+            java.util.regex.Matcher m = p.matcher(html);
+            Set<String> seen = new HashSet<>();
+            while (m.find() && results.size() < 10) {
+                String url = m.group(1).trim();
+                String title = m.group(2).trim()
+                    .replaceAll("<[^>]+>", "")
+                    .replaceAll("\s+", " ");
+                if (!url.isEmpty() && !title.isEmpty() && !seen.contains(url) && title.length() > 3) {
+                    seen.add(url);
+                    results.add(new String[]{title, url, ""});
+                }
+            }
+        } catch (Exception e) { /* ignore */ }
+        return results;
+    }
+
+
 
     private String buildSearchLoadingHtml(String query) {
         return "<!DOCTYPE html><html dir='rtl'><head>" +
@@ -860,6 +904,7 @@ public class MainActivity extends AppCompatActivity {
         popup.getMenu().add(0, 7, 0, "🔍 חפש בדף");
         popup.getMenu().add(0, 8, 0, "➕ הוסף קיצור דרך");
         popup.getMenu().add(0, 9, 0, "📄 הצג מקור דף");
+        popup.getMenu().add(0, 10, 0, "🎬 נגן Kaltura מ-Embed");
         popup.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
                 case 1: toggleDesktopMode(); break;
@@ -877,6 +922,7 @@ public class MainActivity extends AppCompatActivity {
                 case 7: showSearchInPage(); break;
                 case 8: addCurrentPageAsShortcut(); break;
                 case 9: showViewSource(); break;
+                case 10: showKalturaEmbedDialog(); break;
             }
             return true;
         });
@@ -1122,6 +1168,48 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         webView.loadUrl(url);
+    }
+
+    private void showKalturaEmbedDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("🎬 נגן Kaltura");
+        final EditText input = new EditText(this);
+        input.setHint("הדבק כאן את ה-iframe src של Kaltura...");
+        input.setPadding(32, 24, 32, 24);
+        builder.setView(input);
+        builder.setMessage("הדבק את קוד ה-Embed שמכיל cdnapisec.kaltura.com");
+        builder.setPositiveButton("▶ נגן", (dialog, which) -> {
+            String embedUrl = input.getText().toString().trim();
+            // נקה את הקוד אם המשתמש הדביק iframe מלא
+            if (embedUrl.contains("iframe")) {
+                java.util.regex.Matcher srcM = java.util.regex.Pattern
+                    .compile("src=["']([^"']+)["']")
+                    .matcher(embedUrl);
+                if (srcM.find()) embedUrl = srcM.group(1);
+            }
+            try {
+                java.util.regex.Matcher pm = java.util.regex.Pattern
+                    .compile("/p/(\\d+)/").matcher(embedUrl);
+                java.util.regex.Matcher em = java.util.regex.Pattern
+                    .compile("(?:entry_id|entryId)[=\\/]([a-zA-Z0-9_]+)")
+                    .matcher(embedUrl);
+                if (pm.find() && em.find()) {
+                    String partnerId = pm.group(1);
+                    String entryId = em.group(1);
+                    String m3u8 = "https://cdnapisec.kaltura.com/p/" + partnerId +
+                        "/sp/" + partnerId + "00/playManifest/entryId/" + entryId +
+                        "/format/applehttp/protocol/https/a.m3u8";
+                    openHlsPlayer(m3u8);
+                    Toast.makeText(this, "🎬 מנגן: " + entryId, Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(this, "❌ לא נמצא entry_id - וודא שהדבקת embed של Kaltura", Toast.LENGTH_LONG).show();
+                }
+            } catch (Exception e) {
+                Toast.makeText(this, "שגיאה: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            }
+        });
+        builder.setNegativeButton("ביטול", null);
+        builder.show();
     }
 
     @Override
