@@ -482,7 +482,7 @@ public class MainActivity extends AppCompatActivity {
         List<String[]> results = new ArrayList<>();
         try {
             java.util.regex.Pattern p = java.util.regex.Pattern.compile(
-                "<a[^>]+href="(https?://(?!.*duckduckgo)[^"]+)"[^>]*>([^<]{3,100})</a>",
+                "<a[^>]+href=\"(https?://(?!.*duckduckgo)[^\"]+)\"[^>]*>([^<]{3,100})</a>",
                 java.util.regex.Pattern.CASE_INSENSITIVE
             );
             java.util.regex.Matcher m = p.matcher(html);
@@ -1183,7 +1183,7 @@ public class MainActivity extends AppCompatActivity {
             // נקה את הקוד אם המשתמש הדביק iframe מלא
             if (embedUrl.contains("iframe")) {
                 java.util.regex.Matcher srcM = java.util.regex.Pattern
-                    .compile("src=["']([^"']+)["']")
+                    .compile("src=\"([^\"]+)\"")
                     .matcher(embedUrl);
                 if (srcM.find()) embedUrl = srcM.group(1);
             }
