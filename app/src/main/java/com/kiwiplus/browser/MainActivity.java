@@ -170,6 +170,23 @@ public class MainActivity extends AppCompatActivity {
         public void navigate(String url) {
             runOnUiThread(() -> loadUrl(url));
         }
+
+        @JavascriptInterface
+        public void onUrlChanged(String newUrl) {
+            runOnUiThread(() -> {
+                // URL השתנה ב-SPA - נקה מדיה ועדכן URL bar
+                mediaUrls.clear();
+                hlsInjected = false;
+                updateMediaButton(false);
+                urlBar.setText(newUrl);
+                // חכה קצת ואז סרוק מחדש
+                new Handler().postDelayed(() -> {
+                    injectVideoJsListener(webView);
+                    injectMediaScanner(webView);
+                    injectEarlyNetworkObserver(webView);
+                }, 2000);
+            });
+        }
     }
 
     @Override
@@ -670,6 +687,8 @@ public class MainActivity extends AppCompatActivity {
                 swipeRefresh.setRefreshing(false);
                 injectVideoJsListener(view);
                 injectMediaScanner(view);
+                // זיהוי ניווט ב-Next.js/SPA - כשה-URL משתנה בלי טעינת דף חדש
+                injectSpaNavigationObserver(view);
             }
 
             @Override
@@ -705,6 +724,43 @@ public class MainActivity extends AppCompatActivity {
                 recreate();
             }
         });
+    }
+
+    // זיהוי ניווט SPA/Next.js - כשה-URL משתנה בלי טעינת דף חדש
+    private void injectSpaNavigationObserver(WebView view) {
+        String js =
+            "(function() {" +
+            "  if (window._kiwiSpaObserver) return;" +
+            "  window._kiwiSpaObserver = true;" +
+            "  var lastUrl = window.location.href;" +
+            // מאזין לשינויי history
+            "  var origPushState = history.pushState;" +
+            "  history.pushState = function() {" +
+            "    origPushState.apply(this, arguments);" +
+            "    var newUrl = window.location.href;" +
+            "    if (newUrl !== lastUrl) {" +
+            "      lastUrl = newUrl;" +
+            "      window.KiwiPlus.onUrlChanged(newUrl);" +
+            "    }" +
+            "  };" +
+            "  var origReplaceState = history.replaceState;" +
+            "  history.replaceState = function() {" +
+            "    origReplaceState.apply(this, arguments);" +
+            "    var newUrl = window.location.href;" +
+            "    if (newUrl !== lastUrl) {" +
+            "      lastUrl = newUrl;" +
+            "      window.KiwiPlus.onUrlChanged(newUrl);" +
+            "    }" +
+            "  };" +
+            "  window.addEventListener('popstate', function() {" +
+            "    var newUrl = window.location.href;" +
+            "    if (newUrl !== lastUrl) {" +
+            "      lastUrl = newUrl;" +
+            "      window.KiwiPlus.onUrlChanged(newUrl);" +
+            "    }" +
+            "  });" +
+            "})()";
+        view.evaluateJavascript(js, null);
     }
 
     // מזריק observer מוקדם - לפני שהדף מתחיל לטעון
@@ -1092,15 +1148,31 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "לא נמצאו קישורי מדיה", Toast.LENGTH_SHORT).show();
             return;
         }
-        String[] items = mediaUrls.toArray(new String[0]);
+
+        // סנן רק קישורי מדיה אמיתיים
+        List<String> filtered = new ArrayList<>();
+        for (String u : mediaUrls) {
+            if (u.contains(".m3u8") || u.contains(".mp4") || u.contains(".mp3") ||
+                u.contains("playManifest") || u.contains("mainManifest") ||
+                u.contains(".webm") || u.contains(".ts")) {
+                filtered.add(u);
+            }
+        }
+
+        // אם אין קישורים מסוננים - הצג הכל
+        List<String> toShow = filtered.isEmpty() ? mediaUrls : filtered;
+
+        String[] items = toShow.toArray(new String[0]);
         StringBuilder allUrls = new StringBuilder();
-        for (String u : mediaUrls) allUrls.append(u).append("\n");
+        for (String u : toShow) allUrls.append(u).append("\n");
         String allUrlsStr = allUrls.toString().trim();
+
         new AlertDialog.Builder(this)
-            .setTitle("🎬 קישורי מדיה (" + mediaUrls.size() + ")")
+            .setTitle("🎬 קישורי מדיה (" + toShow.size() + ")")
             .setItems(items, (dialog, which) -> {
                 String selectedUrl = items[which];
-                if (selectedUrl.contains(".m3u8")) {
+                if (selectedUrl.contains(".m3u8") || selectedUrl.contains("playManifest") ||
+                    selectedUrl.contains("mainManifest")) {
                     openHlsPlayer(selectedUrl);
                 } else {
                     copyToClipboard(selectedUrl);
