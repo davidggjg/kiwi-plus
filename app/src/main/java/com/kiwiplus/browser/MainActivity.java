@@ -699,14 +699,13 @@ public class MainActivity extends AppCompatActivity {
 
                 String host = request.getUrl().getHost();
 
-                // אם כבר ידוע שהוסט חסום - ישר לפרוקסי
+                // אם כבר ידוע שהוסט חסום - נסה פרוקסי מהיר
                 if (host != null && blockedHosts.contains(host)) {
-                    return fetchViaProxy(url, request);
+                    return fetchViaProxyFast(url, request);
                 }
 
                 try {
                     Request.Builder reqBuilder = new Request.Builder().url(url);
-                    // העבר headers + הוסף UA נכון
                     for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
                         try { reqBuilder.addHeader(header.getKey(), header.getValue()); } catch (Exception ignored) {}
                     }
@@ -719,7 +718,7 @@ public class MainActivity extends AppCompatActivity {
                     if (code == 403 || code == 407 || code == 451 || code == 429) {
                         response.close();
                         if (host != null) blockedHosts.add(host);
-                        return fetchViaProxy(url, request);
+                        return fetchViaProxyFast(url, request);
                     }
 
                     String contentType = response.header("Content-Type", "application/octet-stream");
@@ -741,7 +740,7 @@ public class MainActivity extends AppCompatActivity {
 
                 } catch (Exception e) {
                     if (host != null) blockedHosts.add(host);
-                    return fetchViaProxy(url, request);
+                    return fetchViaProxyFast(url, request);
                 }
             }
 
@@ -750,6 +749,7 @@ public class MainActivity extends AppCompatActivity {
                 if (isHomePage || isSearchResults || url.startsWith(HOME_BASE) || url.startsWith(SEARCH_BASE)) return;
                 mediaUrls.clear();
                 hlsInjected = false;
+                blockedHosts.clear(); // נקה חסימות בין דפים
                 updateMediaButton(false);
                 progressBar.setVisibility(View.VISIBLE);
                 urlBar.setText(url);
@@ -901,6 +901,37 @@ public class MainActivity extends AppCompatActivity {
         view.evaluateJavascript(js, null);
     }
 
+    // פרוקסי עם timeout מהיר - 5 שניות בלבד
+    private WebResourceResponse fetchViaProxyFast(String url, WebResourceRequest request) {
+        try {
+            OkHttpClient fastProxy = proxyClient.newBuilder()
+                .connectTimeout(5, TimeUnit.SECONDS)
+                .readTimeout(8, TimeUnit.SECONDS)
+                .build();
+            String proxyTarget = PROXY_URL + url;
+            Request.Builder reqBuilder = new Request.Builder().url(proxyTarget);
+            for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
+                try { reqBuilder.addHeader(header.getKey(), header.getValue()); } catch (Exception ignored) {}
+            }
+            reqBuilder.header("User-Agent", isDesktopMode ? UA_DESKTOP : UA_MOBILE);
+            Response response = fastProxy.newCall(reqBuilder.build()).execute();
+            if (response.body() == null) { response.close(); return null; }
+            String contentType = response.header("Content-Type", "application/octet-stream");
+            String mimeType = contentType != null && contentType.contains(";")
+                ? contentType.split(";")[0].trim() : contentType;
+            HashMap<String, String> headers = new HashMap<>();
+            for (String name : response.headers().names()) {
+                String val = response.header(name);
+                if (val != null) headers.put(name, val);
+            }
+            headers.put("Access-Control-Allow-Origin", "*");
+            String message = response.message();
+            if (message == null || message.isEmpty()) message = "OK";
+            return new WebResourceResponse(mimeType, "UTF-8",
+                response.code(), message, headers, response.body().byteStream());
+        } catch (Exception e) { return null; } // timeout - תחזיר null ו-WebView ינסה לבד
+    }
+
     private WebResourceResponse fetchViaProxy(String url, WebResourceRequest request) {
         try {
             String proxyTarget = PROXY_URL + url;
@@ -908,7 +939,6 @@ public class MainActivity extends AppCompatActivity {
             for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
                 try { reqBuilder.addHeader(header.getKey(), header.getValue()); } catch (Exception ignored) {}
             }
-            // שלח UA נכון דרך הפרוקסי
             reqBuilder.header("User-Agent", isDesktopMode ? UA_DESKTOP : UA_MOBILE);
 
             Response response = proxyClient.newCall(reqBuilder.build()).execute();
