@@ -694,53 +694,47 @@ public class MainActivity extends AppCompatActivity {
                 checkForMedia(url);
 
                 if (url.startsWith(HOME_BASE) || url.startsWith(SEARCH_BASE) || url.startsWith(PROXY_URL)) return null;
-                if (!request.getMethod().equals("GET")) return null;
                 if (!url.startsWith("http")) return null;
 
                 String host = request.getUrl().getHost();
 
-                // אם כבר ידוע שהוסט חסום - נסה פרוקסי מהיר
+                // רק אם הוסט ידוע כחסום - שלח דרך פרוקסי
+                // כל שאר הבקשות - תן ל-WebView לטעון לבד (מהיר!)
                 if (host != null && blockedHosts.contains(host)) {
-                    return fetchViaProxyFast(url, request);
+                    // רק HTML ראשי דרך פרוקסי - שאר ה-resources ישירות
+                    String type = request.getResourceType();
+                    if ("xmlhttprequest".equals(type) || "fetch".equals(type) ||
+                        url.equals(request.getUrl().toString()) && request.isForMainFrame()) {
+                        return fetchViaProxyFast(url, request);
+                    }
+                    return null; // resources טוענים ישירות
                 }
 
+                // רק לבקשות ראשיות (main frame) בדוק אם נחסם
+                // resources כמו JS/CSS/תמונות - תמיד ישירות
+                if (!request.isForMainFrame() && !"xmlhttprequest".equals(request.getResourceType())) {
+                    return null; // תן ל-WebView לטעון לבד
+                }
+
+                // בדוק רק HTML ראשי ו-XHR requests
                 try {
-                    Request.Builder reqBuilder = new Request.Builder().url(url);
-                    for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
-                        try { reqBuilder.addHeader(header.getKey(), header.getValue()); } catch (Exception ignored) {}
-                    }
+                    Request.Builder reqBuilder = new Request.Builder().url(url)
+                        .head(); // HEAD request - מהיר, בלי להוריד את כל התוכן
                     reqBuilder.header("User-Agent", isDesktopMode ? UA_DESKTOP : UA_MOBILE);
 
-                    Response response = directClient.newCall(reqBuilder.build()).execute();
-                    if (response.body() == null) { response.close(); return null; }
+                    Response headResponse = directClient.newCall(reqBuilder.build()).execute();
+                    int code = headResponse.code();
+                    headResponse.close();
 
-                    int code = response.code();
                     if (code == 403 || code == 407 || code == 451 || code == 429) {
-                        response.close();
                         if (host != null) blockedHosts.add(host);
                         return fetchViaProxyFast(url, request);
                     }
 
-                    String contentType = response.header("Content-Type", "application/octet-stream");
-                    String mimeType = contentType != null && contentType.contains(";")
-                        ? contentType.split(";")[0].trim() : contentType;
-
-                    HashMap<String, String> headers = new HashMap<>();
-                    for (String name : response.headers().names()) {
-                        String val = response.header(name);
-                        if (val != null) headers.put(name, val);
-                    }
-                    headers.put("Access-Control-Allow-Origin", "*");
-
-                    String message = response.message();
-                    if (message == null || message.isEmpty()) message = "OK";
-
-                    return new WebResourceResponse(mimeType, "UTF-8",
-                        response.code(), message, headers, response.body().byteStream());
+                    return null; // תקין - תן ל-WebView לטעון
 
                 } catch (Exception e) {
-                    if (host != null) blockedHosts.add(host);
-                    return fetchViaProxyFast(url, request);
+                    return null; // שגיאה - תן ל-WebView לנסות לבד
                 }
             }
 
