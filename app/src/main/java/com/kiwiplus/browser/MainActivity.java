@@ -228,10 +228,12 @@ public class MainActivity extends AppCompatActivity {
                 .sslSocketFactory(sslContext.getSocketFactory(), (javax.net.ssl.X509TrustManager) trustAll[0])
                 .hostnameVerifier((h, s) -> true);
             directClient = builder.build();
-            proxyClient = builder.newBuilder()
+            proxyClient = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(30, TimeUnit.SECONDS)
                 .connectionPool(new okhttp3.ConnectionPool(5, 30, TimeUnit.SECONDS))
+                .sslSocketFactory(sslContext.getSocketFactory(), (javax.net.ssl.X509TrustManager) trustAll[0])
+                .hostnameVerifier((h, s) -> true)
                 .build();
         } catch (Exception e) {
             directClient = new OkHttpClient();
