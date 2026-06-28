@@ -2,8 +2,10 @@ package com.kiwiplus.browser;
 
 import android.app.AlertDialog;
 import android.content.SharedPreferences;
+import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.net.Uri;
+import android.net.http.SslError;
 import android.os.Bundle;
 import android.os.Handler;
 import android.view.KeyEvent;
@@ -14,6 +16,7 @@ import android.view.animation.AnimationSet;
 import android.view.animation.ScaleAnimation;
 import android.view.inputmethod.EditorInfo;
 import android.webkit.JavascriptInterface;
+import android.webkit.SslErrorHandler;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -59,34 +62,39 @@ public class MainActivity extends AppCompatActivity {
     private boolean isDesktopMode = false;
     private boolean hlsInjected = false;
     private boolean isSearchResults = false;
+    private boolean splashShown = false;
     private Set<String> blockedHosts = new HashSet<>();
     private SharedPreferences prefs;
 
     private static final String[][] DEFAULT_SHORTCUTS = {
-        {"GitHub", "https://github.com", "🐙"},
+        {"כאן 11", "https://www.kan.org.il/live/", "📺"},
         {"YouTube", "https://youtube.com", "▶️"},
-        {"Twitter", "https://twitter.com", "🐦"},
-        {"Reddit", "https://reddit.com", "🤖"},
-        {"Instagram", "https://instagram.com", "📸"},
+        {"רשת 13", "https://www.reshet.tv/live/", "📡"},
+        {"ערוץ 14", "https://www.now14.co.il/live/", "🔴"},
         {"WhatsApp", "https://web.whatsapp.com", "💬"},
-        {"כאן 11", "https://www.kan.org.il", "📺"},
+        {"Twitch", "https://twitch.tv", "🟣"},
+        {"GitHub", "https://github.com", "🐙"},
         {"Telegram", "https://telegram.org", "✈️"}
     };
 
     private static final String PROXY_URL = "https://kiwiplus-proxy.onrender.com/";
-    private static final String DDG_API = "https://api.duckduckgo.com/?format=json&no_redirect=1&no_html=1&q=";
     private static final String DDG_SEARCH = "https://duckduckgo.com/html/?q=";
 
+    // User Agents - Chrome אמיתי כדי לא להיחסם
     private static final String UA_MOBILE =
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
 
     private static final String UA_DESKTOP =
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+    // UA שמתחזה ל-Googlebot לחיפוש
+    private static final String UA_BOT =
+        "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
 
     private static final Pattern MEDIA_PATTERN = Pattern.compile(
-        ".*\\.(mp4|m3u8|mp3|webm|ogg|avi|mkv|ts|flv|mov)(\\?.*)?$",
+        ".*(\\.(mp4|m3u8|mp3|webm|ogg|avi|mkv|flv|mov))(\\?.*)?$",
         Pattern.CASE_INSENSITIVE
     );
 
@@ -96,7 +104,7 @@ public class MainActivity extends AppCompatActivity {
     );
 
     private static final Pattern STREAM_PATTERN = Pattern.compile(
-        ".*(manifest|playlist|\\.m3u8|\\.mpd|stream|segment|\\.ts)(\\?.*)?$",
+        ".*(manifest|playlist|\\.m3u8|\\.mpd|/hls/|/dash/|/live/.*\\.ts)(\\?.*)?$",
         Pattern.CASE_INSENSITIVE
     );
 
@@ -105,10 +113,14 @@ public class MainActivity extends AppCompatActivity {
     private OkHttpClient directClient;
     private OkHttpClient proxyClient;
 
+    // ===== MediaBridge =====
     public class MediaBridge {
         @JavascriptInterface
         public void onMediaFound(String url) {
-            if (url != null && !url.isEmpty() && !mediaUrls.contains(url)) {
+            if (url == null || url.isEmpty()) return;
+            // סנן segments קטנים
+            if (url.matches(".*/(seg|chunk|segment)[-_]?\\d+\\.ts(\\?.*)?$")) return;
+            if (!mediaUrls.contains(url)) {
                 mediaUrls.add(url);
                 runOnUiThread(() -> updateMediaButton(true));
             }
@@ -116,17 +128,16 @@ public class MainActivity extends AppCompatActivity {
 
         @JavascriptInterface
         public void onVideoJsReady(String src) {
-            if (src != null && !src.isEmpty()) {
-                runOnUiThread(() -> {
-                    if (!mediaUrls.contains(src)) {
-                        mediaUrls.add(src);
-                        updateMediaButton(true);
-                    }
-                    if (src.contains(".m3u8") && !hlsInjected) {
-                        injectHlsIntoVideoJs(src);
-                    }
-                });
-            }
+            if (src == null || src.isEmpty()) return;
+            runOnUiThread(() -> {
+                if (!mediaUrls.contains(src)) {
+                    mediaUrls.add(src);
+                    updateMediaButton(true);
+                }
+                if (src.contains(".m3u8") && !hlsInjected) {
+                    injectHlsIntoVideoJs(src);
+                }
+            });
         }
 
         @JavascriptInterface
@@ -141,16 +152,12 @@ public class MainActivity extends AppCompatActivity {
                         arr = new JSONArray();
                         for (String[] s : DEFAULT_SHORTCUTS) {
                             JSONObject obj = new JSONObject();
-                            obj.put("name", s[0]);
-                            obj.put("url", s[1]);
-                            obj.put("emoji", s[2]);
+                            obj.put("name", s[0]); obj.put("url", s[1]); obj.put("emoji", s[2]);
                             arr.put(obj);
                         }
                     }
                     JSONObject newShortcut = new JSONObject();
-                    newShortcut.put("name", name);
-                    newShortcut.put("url", url);
-                    newShortcut.put("emoji", "🌐");
+                    newShortcut.put("name", name); newShortcut.put("url", url); newShortcut.put("emoji", "🌐");
                     arr.put(newShortcut);
                     prefs.edit().putString("shortcuts", arr.toString()).apply();
                     Toast.makeText(MainActivity.this, "✅ קיצור נוסף!", Toast.LENGTH_SHORT).show();
@@ -162,29 +169,23 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @JavascriptInterface
-        public void doSearch(String query) {
-            runOnUiThread(() -> performSearch(query));
-        }
+        public void doSearch(String query) { runOnUiThread(() -> performSearch(query)); }
 
         @JavascriptInterface
-        public void navigate(String url) {
-            runOnUiThread(() -> loadUrl(url));
-        }
+        public void navigate(String url) { runOnUiThread(() -> loadUrl(url)); }
 
         @JavascriptInterface
         public void onUrlChanged(String newUrl) {
             runOnUiThread(() -> {
-                // URL השתנה ב-SPA - נקה מדיה ועדכן URL bar
                 mediaUrls.clear();
                 hlsInjected = false;
                 updateMediaButton(false);
                 urlBar.setText(newUrl);
-                // חכה קצת ואז סרוק מחדש
                 new Handler().postDelayed(() -> {
                     injectVideoJsListener(webView);
                     injectMediaScanner(webView);
                     injectEarlyNetworkObserver(webView);
-                }, 2000);
+                }, 1500);
             });
         }
     }
@@ -210,25 +211,64 @@ public class MainActivity extends AppCompatActivity {
         splashTitle = findViewById(R.id.splashTitle);
         splashSubtitle = findViewById(R.id.splashSubtitle);
 
-        directClient = new OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .build();
-
-        proxyClient = new OkHttpClient.Builder()
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .connectionPool(new okhttp3.ConnectionPool(5, 30, TimeUnit.SECONDS))
-            .build();
+        // OkHttp עם SSL lenient
+        javax.net.ssl.TrustManager[] trustAll = new javax.net.ssl.TrustManager[]{
+            new javax.net.ssl.X509TrustManager() {
+                public void checkClientTrusted(java.security.cert.X509Certificate[] c, String a) {}
+                public void checkServerTrusted(java.security.cert.X509Certificate[] c, String a) {}
+                public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[]{}; }
+            }
+        };
+        try {
+            javax.net.ssl.SSLContext sslContext = javax.net.ssl.SSLContext.getInstance("SSL");
+            sslContext.init(null, trustAll, new java.security.SecureRandom());
+            okhttp3.OkHttpClient.Builder builder = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(12, TimeUnit.SECONDS)
+                .readTimeout(20, TimeUnit.SECONDS)
+                .sslSocketFactory(sslContext.getSocketFactory(), (javax.net.ssl.X509TrustManager) trustAll[0])
+                .hostnameVerifier((h, s) -> true);
+            directClient = builder.build();
+            proxyClient = builder.newBuilder()
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .connectionPool(new okhttp3.ConnectionPool(5, 30, TimeUnit.SECONDS))
+                .build();
+        } catch (Exception e) {
+            directClient = new OkHttpClient();
+            proxyClient = new OkHttpClient();
+        }
 
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         webView.setBackgroundColor(0xFFf0f7ee);
         webView.addJavascriptInterface(new MediaBridge(), "KiwiPlus");
 
-        showSplash();
+        // שמור את מצב ה-WebView בין rotations
+        if (savedInstanceState != null) {
+            webView.restoreState(savedInstanceState);
+            splashScreen.setVisibility(View.GONE);
+            webView.setVisibility(View.VISIBLE);
+            splashShown = true;
+        } else {
+            showSplash();
+        }
+
         setupWebView();
         setupButtons();
         setupUrlBar();
+    }
+
+    // ===== חשוב: שמור state בסיבוב מסך =====
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        if (webView != null) webView.saveState(outState);
+    }
+
+    // ===== מניעת recreate בסיבוב מסך =====
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        // לא עושים כלום - WebView ישמר את מצבו
     }
 
     private void showSplash() {
@@ -244,12 +284,12 @@ public class MainActivity extends AppCompatActivity {
         anim.addAnimation(fade);
         splashTitle.startAnimation(anim);
         splashSubtitle.startAnimation(fade);
-        new Handler().postDelayed(this::hideSplash, 2500);
+        new Handler().postDelayed(this::hideSplash, 2000);
     }
 
     private void hideSplash() {
         AlphaAnimation fadeOut = new AlphaAnimation(1f, 0f);
-        fadeOut.setDuration(500);
+        fadeOut.setDuration(400);
         fadeOut.setAnimationListener(new Animation.AnimationListener() {
             @Override public void onAnimationStart(Animation a) {}
             @Override public void onAnimationRepeat(Animation a) {}
@@ -314,8 +354,7 @@ public class MainActivity extends AppCompatActivity {
             "  color:#2d4a1e; background:transparent; padding:10px 0; }" +
             ".search-box input::placeholder { color:#aaa; }" +
             ".search-btn { width:40px; height:40px; border-radius:50%; background:#3a7d1e;" +
-            "  border:none; cursor:pointer; display:flex; align-items:center; justify-content:center;" +
-            "  font-size:18px; flex-shrink:0; }" +
+            "  border:none; cursor:pointer; font-size:18px; flex-shrink:0; }" +
             ".section-title { font-size:17px; font-weight:700; margin:20px 0 12px; color:#2d4a1e;" +
             "  display:flex; justify-content:space-between; align-items:center; }" +
             ".edit-btn { font-size:12px; color:#7aaa5a; cursor:pointer; padding:4px 8px;" +
@@ -344,7 +383,7 @@ public class MainActivity extends AppCompatActivity {
             "</div>" +
             "<div class='search-box'>" +
             "  <input type='text' id='q' placeholder='חפש או הכנס כתובת...' " +
-            "    onkeydown='if(event.key==\"Enter\") doSearch()' />" +
+            "    onkeydown='if(event.key===\"Enter\") doSearch()' />" +
             "  <button class='search-btn' onclick='doSearch()'>🔍</button>" +
             "</div>" +
             "<div class='section-title'>" +
@@ -357,7 +396,7 @@ public class MainActivity extends AppCompatActivity {
             "<h3>פרוקסי חכם</h3><p>ישיר כשאפשר, פרוקסי כשנחסם</p>" +
             "<span class='badge'>🟢 פעיל</span></div></div></div>" +
             "<div class='card'><div class='row'><div class='cicon'>🎬</div><div class='ctext'>" +
-            "<h3>זיהוי שידורים</h3><p>תופס קישורי מדיה מוסתרים אוטומטית</p>" +
+            "<h3>זיהוי שידורים</h3><p>תופס HLS, DASH, Kaltura אוטומטית</p>" +
             "<span class='badge'>🟢 פעיל</span></div></div></div>" +
             "<script>" +
             "function doSearch() {" +
@@ -378,16 +417,11 @@ public class MainActivity extends AppCompatActivity {
         webView.loadDataWithBaseURL(HOME_BASE, html, "text/html", "UTF-8", null);
     }
 
+    // ===== חיפוש משופר - Google + DDG =====
     private void performSearch(String query) {
         query = query.trim();
-        if (query.startsWith("http://") || query.startsWith("https://")) {
-            loadUrl(query);
-            return;
-        }
-        if (query.contains(".") && !query.contains(" ")) {
-            loadUrl("https://" + query);
-            return;
-        }
+        if (query.startsWith("http://") || query.startsWith("https://")) { loadUrl(query); return; }
+        if (query.contains(".") && !query.contains(" ") && !query.startsWith(".")) { loadUrl("https://" + query); return; }
 
         isSearchResults = true;
         isHomePage = false;
@@ -397,71 +431,93 @@ public class MainActivity extends AppCompatActivity {
         webView.loadDataWithBaseURL(SEARCH_BASE, buildSearchLoadingHtml(query), "text/html", "UTF-8", null);
 
         new Thread(() -> {
+            List<String[]> results = new ArrayList<>();
             try {
-                String encodedQuery = Uri.encode(finalQuery);
-
-                // ניסיון 1 - DDG JSON API
-                Request req1 = new Request.Builder()
-                    .url("https://api.duckduckgo.com/?q=" + encodedQuery + "&format=json&no_redirect=1&no_html=1&skip_disambig=1")
-                    .header("User-Agent", "Mozilla/5.0")
+                // ניסיון 1: DuckDuckGo Lite עם headers שמתחזים לדפדפן אמיתי
+                String encodedQ = Uri.encode(finalQuery);
+                Request req = new Request.Builder()
+                    .url("https://lite.duckduckgo.com/lite/?q=" + encodedQ + "&kl=il-he")
+                    .header("User-Agent", UA_MOBILE)
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                    .header("Accept-Language", "he-IL,he;q=0.9,en;q=0.8")
+                    .header("Referer", "https://duckduckgo.com/")
                     .build();
-                Response res1 = directClient.newCall(req1).execute();
-                String body1 = res1.body() != null ? res1.body().string() : "{}";
-                List<String[]> results = parseDDGJson(body1, finalQuery);
+                Response res = directClient.newCall(req).execute();
+                String body = res.body() != null ? res.body().string() : "";
+                results = parseDDGLite(body);
 
-                // ניסיון 2 - DDG Lite אם אין תוצאות
+                // ניסיון 2: DDG JSON API אם Lite נכשל
                 if (results.isEmpty()) {
                     Request req2 = new Request.Builder()
-                        .url("https://lite.duckduckgo.com/lite/?q=" + encodedQuery)
-                        .header("User-Agent", "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")
+                        .url("https://api.duckduckgo.com/?q=" + encodedQ + "&format=json&no_redirect=1&no_html=1&skip_disambig=1&kl=il-he")
+                        .header("User-Agent", UA_MOBILE)
                         .build();
                     Response res2 = directClient.newCall(req2).execute();
-                    String body2 = res2.body() != null ? res2.body().string() : "";
-                    results = parseDDGLite(body2);
+                    String body2 = res2.body() != null ? res2.body().string() : "{}";
+                    results = parseDDGJson(body2, finalQuery);
                 }
 
-                final List<String[]> finalResults = results;
-                runOnUiThread(() -> {
-                    if (finalResults.isEmpty()) {
-                        isSearchResults = false;
-                        webView.loadUrl("https://duckduckgo.com/?q=" + Uri.encode(finalQuery));
-                    } else {
-                        webView.loadDataWithBaseURL(SEARCH_BASE,
-                            buildSearchResultsHtml(finalQuery, finalResults),
-                            "text/html", "UTF-8", null);
-                    }
-                });
+                // ניסיון 3: Google fallback
+                if (results.isEmpty()) {
+                    Request req3 = new Request.Builder()
+                        .url("https://www.google.com/search?q=" + encodedQ + "&hl=he&num=10")
+                        .header("User-Agent", UA_BOT)
+                        .build();
+                    Response res3 = directClient.newCall(req3).execute();
+                    String body3 = res3.body() != null ? res3.body().string() : "";
+                    results = parseGoogleResults(body3);
+                }
 
-            } catch (Exception e) {
-                runOnUiThread(() -> {
+            } catch (Exception e) { /* fallback below */ }
+
+            final List<String[]> finalResults = results;
+            runOnUiThread(() -> {
+                if (finalResults.isEmpty()) {
+                    // fallback: פתח DuckDuckGo ישירות
                     isSearchResults = false;
-                    webView.loadUrl("https://duckduckgo.com/?q=" + Uri.encode(finalQuery));
-                });
-            }
+                    webView.loadUrl("https://duckduckgo.com/?q=" + Uri.encode(finalQuery) + "&kl=il-he");
+                } else {
+                    webView.loadDataWithBaseURL(SEARCH_BASE,
+                        buildSearchResultsHtml(finalQuery, finalResults),
+                        "text/html", "UTF-8", null);
+                }
+            });
         }).start();
+    }
+
+    // ===== פרסור Google תוצאות =====
+    private List<String[]> parseGoogleResults(String html) {
+        List<String[]> results = new ArrayList<>();
+        try {
+            // חלץ תוצאות מ-Google HTML
+            java.util.regex.Pattern p = java.util.regex.Pattern.compile(
+                "<h3[^>]*>([^<]+)</h3>[\\s\\S]{0,300}?href=\"(https?://(?!(?:www\\.)?google\\.)[^\"]+)\"",
+                java.util.regex.Pattern.CASE_INSENSITIVE
+            );
+            java.util.regex.Matcher m = p.matcher(html);
+            Set<String> seen = new HashSet<>();
+            while (m.find() && results.size() < 10) {
+                String title = m.group(1).replaceAll("<[^>]+>", "").trim();
+                String url = m.group(2).trim();
+                if (!url.isEmpty() && !title.isEmpty() && !seen.contains(url)) {
+                    seen.add(url);
+                    results.add(new String[]{title, url, ""});
+                }
+            }
+        } catch (Exception e) {}
+        return results;
     }
 
     private List<String[]> parseDDGJson(String json, String query) {
         List<String[]> results = new ArrayList<>();
         try {
             JSONObject obj = new JSONObject(json);
-
-            // Abstract
             String abstractText = obj.optString("AbstractText", "");
             String abstractUrl = obj.optString("AbstractURL", "");
             String abstractSource = obj.optString("AbstractSource", "");
-            if (!abstractText.isEmpty() && !abstractUrl.isEmpty()) {
+            if (!abstractText.isEmpty() && !abstractUrl.isEmpty())
                 results.add(new String[]{abstractSource.isEmpty() ? query : abstractSource, abstractUrl, abstractText});
-            }
 
-            // Answer
-            String answer = obj.optString("Answer", "");
-            String answerType = obj.optString("AnswerType", "");
-            if (!answer.isEmpty()) {
-                results.add(new String[]{"תשובה מיידית", "https://duckduckgo.com/?q=" + Uri.encode(query), answer});
-            }
-
-            // RelatedTopics
             JSONArray topics = obj.optJSONArray("RelatedTopics");
             if (topics != null) {
                 for (int i = 0; i < topics.length() && results.size() < 8; i++) {
@@ -469,66 +525,80 @@ public class MainActivity extends AppCompatActivity {
                         JSONObject topic = topics.getJSONObject(i);
                         String url = topic.optString("FirstURL", "");
                         String text = topic.optString("Text", "");
-                        if (!url.isEmpty() && !text.isEmpty()) {
-                            String title = text.length() > 80 ? text.substring(0, 80) + "..." : text;
-                            results.add(new String[]{title, url, text});
-                        }
+                        if (!url.isEmpty() && !text.isEmpty())
+                            results.add(new String[]{text.length() > 80 ? text.substring(0, 80) + "..." : text, url, text});
                     } catch (Exception ignored) {}
                 }
             }
-
-            // Results
-            JSONArray ddgResults = obj.optJSONArray("Results");
-            if (ddgResults != null) {
-                for (int i = 0; i < ddgResults.length() && results.size() < 10; i++) {
-                    try {
-                        JSONObject r = ddgResults.getJSONObject(i);
-                        String url = r.optString("FirstURL", "");
-                        String text = r.optString("Text", "");
-                        if (!url.isEmpty() && !text.isEmpty()) {
-                            results.add(new String[]{text, url, ""});
-                        }
-                    } catch (Exception ignored) {}
-                }
-            }
-        } catch (Exception e) { /* ignore */ }
+        } catch (Exception e) {}
         return results;
     }
 
     private List<String[]> parseDDGLite(String html) {
         List<String[]> results = new ArrayList<>();
         try {
-            java.util.regex.Pattern p = java.util.regex.Pattern.compile(
-                "<a[^>]+href=\"(https?://(?!.*duckduckgo)[^\"]+)\"[^>]*>([^<]{3,100})</a>",
+            // DDG Lite - חלץ תוצאות עם title + URL + snippet
+            java.util.regex.Pattern titlePat = java.util.regex.Pattern.compile(
+                "<a[^>]+class=\"result-link\"[^>]+href=\"([^\"]+)\"[^>]*>([^<]+)</a>",
                 java.util.regex.Pattern.CASE_INSENSITIVE
             );
-            java.util.regex.Matcher m = p.matcher(html);
+            java.util.regex.Pattern snippetPat = java.util.regex.Pattern.compile(
+                "<td[^>]+class=\"result-snippet\"[^>]*>([^<]{10,300})</td>",
+                java.util.regex.Pattern.CASE_INSENSITIVE
+            );
+            java.util.regex.Matcher tm = titlePat.matcher(html);
+            java.util.regex.Matcher sm = snippetPat.matcher(html);
+            List<String> snippets = new ArrayList<>();
+            while (sm.find()) snippets.add(sm.group(1).trim().replaceAll("<[^>]+>", ""));
             Set<String> seen = new HashSet<>();
-            while (m.find() && results.size() < 10) {
-                String url = m.group(1).trim();
-                String title = m.group(2).trim()
-                    .replaceAll("<[^>]+>", "")
-                    .replaceAll("\s+", " ");
-                if (!url.isEmpty() && !title.isEmpty() && !seen.contains(url) && title.length() > 3) {
+            int idx = 0;
+            while (tm.find() && results.size() < 10) {
+                String url = tm.group(1).trim();
+                String title = tm.group(2).trim().replaceAll("<[^>]+>", "");
+                if (url.startsWith("//")) url = "https:" + url;
+                // ניקוי redirect URLs של DDG
+                if (url.contains("duckduckgo.com/l/?uddg=")) {
+                    try {
+                        String encoded = url.replaceAll(".*uddg=([^&]+).*", "$1");
+                        url = java.net.URLDecoder.decode(encoded, "UTF-8");
+                    } catch (Exception e2) {}
+                }
+                if (!url.startsWith("http") || url.contains("duckduckgo.com")) { idx++; continue; }
+                if (!seen.contains(url) && !title.isEmpty()) {
                     seen.add(url);
-                    results.add(new String[]{title, url, ""});
+                    String snippet = idx < snippets.size() ? snippets.get(idx) : "";
+                    results.add(new String[]{title, url, snippet});
+                }
+                idx++;
+            }
+
+            // fallback parsing אם הסגנון שונה
+            if (results.isEmpty()) {
+                java.util.regex.Pattern p2 = java.util.regex.Pattern.compile(
+                    "<a[^>]+href=\"(https?://(?!.*duckduckgo)[^\"]{10,}?)\"[^>]*>([^<]{5,120})</a>",
+                    java.util.regex.Pattern.CASE_INSENSITIVE
+                );
+                java.util.regex.Matcher m2 = p2.matcher(html);
+                while (m2.find() && results.size() < 10) {
+                    String url = m2.group(1).trim();
+                    String title = m2.group(2).trim().replaceAll("<[^>]+>", "");
+                    if (!seen.contains(url) && !title.isEmpty() && title.length() > 4) {
+                        seen.add(url);
+                        results.add(new String[]{title, url, ""});
+                    }
                 }
             }
-        } catch (Exception e) { /* ignore */ }
+        } catch (Exception e) {}
         return results;
     }
-
-
 
     private String buildSearchLoadingHtml(String query) {
         return "<!DOCTYPE html><html dir='rtl'><head>" +
             "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
-            "<style>" +
-            "* { margin:0; padding:0; box-sizing:border-box; }" +
+            "<style>* { margin:0; padding:0; box-sizing:border-box; }" +
             "body { background:#f5faf0; font-family:sans-serif; padding:16px; }" +
             ".header { display:flex; align-items:center; gap:12px; margin-bottom:20px; }" +
             ".logo { font-size:24px; font-weight:900; color:#3a7d1e; }" +
-            ".query { color:#666; font-size:14px; }" +
             ".loading { display:flex; flex-direction:column; align-items:center; margin-top:60px; gap:16px; }" +
             ".dots { display:flex; gap:8px; }" +
             ".dot { width:10px; height:10px; border-radius:50%; background:#3a7d1e;" +
@@ -537,7 +607,7 @@ public class MainActivity extends AppCompatActivity {
             "@keyframes pulse{0%,80%,100%{transform:scale(.6);opacity:.4}40%{transform:scale(1);opacity:1}}" +
             "</style></head><body>" +
             "<div class='header'><span class='logo'>KiwiPlus 🥝</span>" +
-            "<span class='query'>מחפש: " + query + "</span></div>" +
+            "<span style='color:#666;font-size:14px;'>מחפש: " + query + "</span></div>" +
             "<div class='loading'><div class='dots'>" +
             "<div class='dot'></div><div class='dot'></div><div class='dot'></div>" +
             "</div><p style='color:#666;font-size:14px;'>מחפש...</p></div>" +
@@ -550,46 +620,39 @@ public class MainActivity extends AppCompatActivity {
           .append("<meta name='viewport' content='width=device-width, initial-scale=1'>")
           .append("<style>")
           .append("* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }")
-          .append("body { background:#f5faf0; font-family:sans-serif; padding:16px 16px 80px; }")
-          .append(".header { display:flex; align-items:center; gap:8px; margin-bottom:16px; padding-bottom:12px; border-bottom:2px solid #e0f0e0; }")
+          .append("body { background:#f5faf0; font-family:sans-serif; padding:12px 12px 80px; }")
+          .append(".header { display:flex; align-items:center; gap:8px; margin-bottom:14px; padding-bottom:10px; border-bottom:2px solid #e0f0e0; }")
           .append(".logo { font-size:22px; font-weight:900; color:#3a7d1e; }")
           .append(".search-row { flex:1; display:flex; background:white; border-radius:20px; padding:6px 12px; box-shadow:0 1px 6px rgba(0,0,0,0.1); }")
           .append(".search-row input { flex:1; border:none; outline:none; font-size:14px; color:#333; background:transparent; }")
           .append(".search-row button { background:none; border:none; cursor:pointer; font-size:16px; }")
-          .append(".result { background:white; border-radius:12px; padding:14px; margin-bottom:10px; box-shadow:0 1px 6px rgba(0,0,0,0.06); cursor:pointer; }")
+          .append(".result { background:white; border-radius:12px; padding:12px; margin-bottom:8px; box-shadow:0 1px 6px rgba(0,0,0,0.06); cursor:pointer; active:background:#f0f9f0; }")
           .append(".result:active { background:#f0f9f0; }")
-          .append(".result-title { font-size:16px; font-weight:600; color:#1a0dab; margin-bottom:4px; }")
-          .append(".result-url { font-size:11px; color:#3a7d1e; margin-bottom:6px; }")
-          .append(".result-snippet { font-size:13px; color:#555; line-height:1.4; }")
-          .append(".no-results { text-align:center; margin-top:40px; color:#888; }")
-          .append(".count { font-size:12px; color:#888; margin-bottom:12px; }")
+          .append(".result-title { font-size:15px; font-weight:600; color:#1a0dab; margin-bottom:3px; }")
+          .append(".result-url { font-size:11px; color:#3a7d1e; margin-bottom:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }")
+          .append(".result-snippet { font-size:12px; color:#555; line-height:1.4; }")
+          .append(".count { font-size:11px; color:#888; margin-bottom:10px; }")
           .append("</style></head><body>")
           .append("<div class='header'>")
           .append("<span class='logo'>🥝</span>")
           .append("<div class='search-row'>")
-          .append("<input type='text' id='q' value='").append(query.replace("'", "\\'")).append("' onkeydown='if(event.key==\"Enter\") doSearch()' />")
+          .append("<input type='text' id='q' value='").append(query.replace("'", "\\'")).append("' onkeydown='if(event.key===\"Enter\") doSearch()' />")
           .append("<button onclick='doSearch()'>🔍</button>")
           .append("</div></div>");
 
-        if (results.isEmpty()) {
-            sb.append("<div class='no-results'>")
-              .append("<p style='font-size:40px;margin-bottom:12px;'>🔍</p>")
-              .append("<p>לא נמצאו תוצאות</p>")
-              .append("</div>");
-        } else {
-            sb.append("<p class='count'>").append(results.size()).append(" תוצאות</p>");
-            for (String[] r : results) {
-                String title = r[0];
-                String url = r[1];
-                String snippet = r[2];
-                String displayUrl = url.length() > 50 ? url.substring(0, 50) + "..." : url;
-                sb.append("<div class='result' onclick=\"KiwiPlus.navigate('")
-                  .append(url.replace("'", "\\'")).append("')\">")
-                  .append("<div class='result-title'>").append(title).append("</div>")
-                  .append("<div class='result-url'>").append(displayUrl).append("</div>")
-                  .append("<div class='result-snippet'>").append(snippet).append("</div>")
-                  .append("</div>");
-            }
+        sb.append("<p class='count'>").append(results.size()).append(" תוצאות</p>");
+        for (String[] r : results) {
+            String title = r[0];
+            String url = r[1];
+            String snippet = r.length > 2 ? r[2] : "";
+            String displayUrl = url.length() > 45 ? url.substring(0, 45) + "..." : url;
+            sb.append("<div class='result' onclick=\"KiwiPlus.navigate('")
+              .append(url.replace("'", "\\'")).append("')\">")
+              .append("<div class='result-title'>").append(title).append("</div>")
+              .append("<div class='result-url'>").append(displayUrl).append("</div>");
+            if (!snippet.isEmpty())
+                sb.append("<div class='result-snippet'>").append(snippet).append("</div>");
+            sb.append("</div>");
         }
 
         sb.append("<script>")
@@ -598,7 +661,6 @@ public class MainActivity extends AppCompatActivity {
           .append("  if (q) KiwiPlus.doSearch(q);")
           .append("}")
           .append("</script></body></html>");
-
         return sb.toString();
     }
 
@@ -617,44 +679,64 @@ public class MainActivity extends AppCompatActivity {
         settings.setUserAgentString(UA_MOBILE);
 
         webView.setWebViewClient(new WebViewClient() {
+
+            // ===== טיפול ב-SSL errors - מאפשר לאתרים ישראלים עם הצפנה מיוחדת =====
+            @Override
+            public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
+                handler.proceed(); // תמיד המשך - מטפל בכל SSL
+            }
+
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
                 checkForMedia(url);
+
                 if (url.startsWith(HOME_BASE) || url.startsWith(SEARCH_BASE) || url.startsWith(PROXY_URL)) return null;
                 if (!request.getMethod().equals("GET")) return null;
                 if (!url.startsWith("http")) return null;
 
                 String host = request.getUrl().getHost();
+
+                // אם כבר ידוע שהוסט חסום - ישר לפרוקסי
                 if (host != null && blockedHosts.contains(host)) {
                     return fetchViaProxy(url, request);
                 }
 
                 try {
                     Request.Builder reqBuilder = new Request.Builder().url(url);
+                    // העבר headers + הוסף UA נכון
                     for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
                         try { reqBuilder.addHeader(header.getKey(), header.getValue()); } catch (Exception ignored) {}
                     }
+                    reqBuilder.header("User-Agent", isDesktopMode ? UA_DESKTOP : UA_MOBILE);
+
                     Response response = directClient.newCall(reqBuilder.build()).execute();
-                    if (response.body() == null) return null;
+                    if (response.body() == null) { response.close(); return null; }
+
                     int code = response.code();
-                    if (code == 403 || code == 407 || code == 451) {
+                    if (code == 403 || code == 407 || code == 451 || code == 429) {
                         response.close();
                         if (host != null) blockedHosts.add(host);
                         return fetchViaProxy(url, request);
                     }
-                    String contentType = response.header("Content-Type", "text/plain");
+
+                    String contentType = response.header("Content-Type", "application/octet-stream");
                     String mimeType = contentType != null && contentType.contains(";")
                         ? contentType.split(";")[0].trim() : contentType;
+
                     HashMap<String, String> headers = new HashMap<>();
                     for (String name : response.headers().names()) {
                         String val = response.header(name);
                         if (val != null) headers.put(name, val);
                     }
+                    headers.put("Access-Control-Allow-Origin", "*");
+
                     String message = response.message();
                     if (message == null || message.isEmpty()) message = "OK";
+
                     return new WebResourceResponse(mimeType, "UTF-8",
                         response.code(), message, headers, response.body().byteStream());
+
                 } catch (Exception e) {
                     if (host != null) blockedHosts.add(host);
                     return fetchViaProxy(url, request);
@@ -669,7 +751,6 @@ public class MainActivity extends AppCompatActivity {
                 updateMediaButton(false);
                 progressBar.setVisibility(View.VISIBLE);
                 urlBar.setText(url);
-                // הזרק network observer מוקדם - לפני שהדף נטען!
                 injectEarlyNetworkObserver(view);
             }
 
@@ -687,8 +768,11 @@ public class MainActivity extends AppCompatActivity {
                 swipeRefresh.setRefreshing(false);
                 injectVideoJsListener(view);
                 injectMediaScanner(view);
-                // זיהוי ניווט ב-Next.js/SPA - כשה-URL משתנה בלי טעינת דף חדש
                 injectSpaNavigationObserver(view);
+                // סרוק שוב אחרי 3 שניות - לשידורים שנטענים לאט
+                new Handler().postDelayed(() -> {
+                    if (webView != null) injectMediaScanner(webView);
+                }, 3000);
             }
 
             @Override
@@ -721,94 +805,92 @@ public class MainActivity extends AppCompatActivity {
                 setContentView(R.layout.activity_main);
                 if (customViewCallback != null) { customViewCallback.onCustomViewHidden(); customViewCallback = null; }
                 customView = null;
-                recreate();
+                // אל תעשה recreate! במקום זה - אפס views
+                setupWebViewReferences();
             }
         });
     }
 
-    // זיהוי ניווט SPA/Next.js - כשה-URL משתנה בלי טעינת דף חדש
+    // אפס references אחרי fullscreen בלי recreate
+    private void setupWebViewReferences() {
+        webView = findViewById(R.id.webView);
+        urlBar = findViewById(R.id.urlBar);
+        progressBar = findViewById(R.id.progressBar);
+        btnBack = findViewById(R.id.btnBack);
+        btnForward = findViewById(R.id.btnForward);
+        btnRefresh = findViewById(R.id.btnRefresh);
+        btnMedia = findViewById(R.id.btnMedia);
+        btnHome = findViewById(R.id.btnHome);
+        btnMenu = findViewById(R.id.btnMenu);
+        swipeRefresh = findViewById(R.id.swipeRefresh);
+        setupButtons();
+        setupUrlBar();
+    }
+
     private void injectSpaNavigationObserver(WebView view) {
         String js =
             "(function() {" +
             "  if (window._kiwiSpaObserver) return;" +
             "  window._kiwiSpaObserver = true;" +
             "  var lastUrl = window.location.href;" +
-            // מאזין לשינויי history
             "  var origPushState = history.pushState;" +
             "  history.pushState = function() {" +
             "    origPushState.apply(this, arguments);" +
             "    var newUrl = window.location.href;" +
-            "    if (newUrl !== lastUrl) {" +
-            "      lastUrl = newUrl;" +
-            "      window.KiwiPlus.onUrlChanged(newUrl);" +
-            "    }" +
+            "    if (newUrl !== lastUrl) { lastUrl = newUrl; window.KiwiPlus.onUrlChanged(newUrl); }" +
             "  };" +
             "  var origReplaceState = history.replaceState;" +
             "  history.replaceState = function() {" +
             "    origReplaceState.apply(this, arguments);" +
             "    var newUrl = window.location.href;" +
-            "    if (newUrl !== lastUrl) {" +
-            "      lastUrl = newUrl;" +
-            "      window.KiwiPlus.onUrlChanged(newUrl);" +
-            "    }" +
+            "    if (newUrl !== lastUrl) { lastUrl = newUrl; window.KiwiPlus.onUrlChanged(newUrl); }" +
             "  };" +
             "  window.addEventListener('popstate', function() {" +
             "    var newUrl = window.location.href;" +
-            "    if (newUrl !== lastUrl) {" +
-            "      lastUrl = newUrl;" +
-            "      window.KiwiPlus.onUrlChanged(newUrl);" +
-            "    }" +
+            "    if (newUrl !== lastUrl) { lastUrl = newUrl; window.KiwiPlus.onUrlChanged(newUrl); }" +
             "  });" +
             "})()";
         view.evaluateJavascript(js, null);
     }
 
-    // מזריק observer מוקדם - לפני שהדף מתחיל לטעון
     private void injectEarlyNetworkObserver(WebView view) {
         String js =
             "(function() {" +
             "  if (window._kiwiEarlyObserver) return;" +
             "  window._kiwiEarlyObserver = true;" +
-            // XMLHttpRequest - תופס AJAX
             "  var origOpen = XMLHttpRequest.prototype.open;" +
             "  XMLHttpRequest.prototype.open = function(method, url) {" +
             "    if (url && typeof url === 'string') {" +
-            "      var isMedia = /\\.(m3u8|mp4|ts|mp3|webm|mpd)(\\?|$)/i.test(url);" +
-            "      var isStream = /(manifest|playlist|stream|hls|dash|segment|chunk)/i.test(url);" +
-            "      var isKaltura = /kaltura|entry_id/i.test(url);" +
-            "      if (isMedia || isStream || isKaltura) window.KiwiPlus.onMediaFound(url);" +
+            "      if (/\\.(m3u8|mp4|ts|mp3|webm|mpd)(\\?|$)/i.test(url) ||" +
+            "          /(manifest|playlist|hls|dash|live\\/)/i.test(url) ||" +
+            "          /kaltura|entry_id/i.test(url)) {" +
+            "        try { window.KiwiPlus.onMediaFound(url); } catch(e) {}" +
+            "      }" +
             "    }" +
             "    return origOpen.apply(this, arguments);" +
             "  };" +
-            // Fetch - תופס fetch requests
             "  var origFetch = window.fetch;" +
             "  window.fetch = function(input, init) {" +
             "    var url = typeof input === 'string' ? input : (input && input.url ? input.url : '');" +
             "    if (url) {" +
-            "      var isMedia = /\\.(m3u8|mp4|ts|mp3|webm|mpd)(\\?|$)/i.test(url);" +
-            "      var isStream = /(manifest|playlist|stream|hls|dash|segment|chunk)/i.test(url);" +
-            "      var isKaltura = /kaltura|entry_id/i.test(url);" +
-            "      if (isMedia || isStream || isKaltura) window.KiwiPlus.onMediaFound(url);" +
+            "      if (/\\.(m3u8|mp4|ts|mp3|webm|mpd)(\\?|$)/i.test(url) ||" +
+            "          /(manifest|playlist|hls|dash|live\\/)/i.test(url) ||" +
+            "          /kaltura|entry_id/i.test(url)) {" +
+            "        try { window.KiwiPlus.onMediaFound(url); } catch(e) {}" +
+            "      }" +
             "    }" +
             "    return origFetch.apply(this, arguments);" +
             "  };" +
-            // WebSocket - תופס websocket streams
-            "  var origWS = window.WebSocket;" +
-            "  window.WebSocket = function(url, protocols) {" +
-            "    if (url && /(stream|video|media|live)/i.test(url)) {" +
-            "      window.KiwiPlus.onMediaFound(url);" +
-            "    }" +
-            "    return protocols ? new origWS(url, protocols) : new origWS(url);" +
-            "  };" +
-            // PerformanceObserver - תופס resources שנטענו
+            // PerformanceObserver - תופס resources
             "  try {" +
             "    var observer = new PerformanceObserver(function(list) {" +
             "      list.getEntries().forEach(function(entry) {" +
             "        var url = entry.name;" +
             "        if (!url || !url.startsWith('http')) return;" +
-            "        var isMedia = /\\.(m3u8|mp4|ts|mp3|webm|mpd)(\\?|$)/i.test(url);" +
-            "        var isStream = /(manifest|playlist|stream|hls|dash|segment|chunk)/i.test(url);" +
-            "        if (isMedia || isStream) window.KiwiPlus.onMediaFound(url);" +
+            "        if (/\\.(m3u8|mp4|mpd)(\\?|$)/i.test(url) ||" +
+            "            /(manifest|playlist|\\/live\\/)/i.test(url)) {" +
+            "          try { window.KiwiPlus.onMediaFound(url); } catch(e) {}" +
+            "        }" +
             "      });" +
             "    });" +
             "    observer.observe({ entryTypes: ['resource'] });" +
@@ -824,9 +906,13 @@ public class MainActivity extends AppCompatActivity {
             for (java.util.Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
                 try { reqBuilder.addHeader(header.getKey(), header.getValue()); } catch (Exception ignored) {}
             }
+            // שלח UA נכון דרך הפרוקסי
+            reqBuilder.header("User-Agent", isDesktopMode ? UA_DESKTOP : UA_MOBILE);
+
             Response response = proxyClient.newCall(reqBuilder.build()).execute();
-            if (response.body() == null) return null;
-            String contentType = response.header("Content-Type", "text/plain");
+            if (response.body() == null) { response.close(); return null; }
+
+            String contentType = response.header("Content-Type", "application/octet-stream");
             String mimeType = contentType != null && contentType.contains(";")
                 ? contentType.split(";")[0].trim() : contentType;
             HashMap<String, String> headers = new HashMap<>();
@@ -865,18 +951,15 @@ public class MainActivity extends AppCompatActivity {
             "      window._kiwiHooked = true;" +
             "      videojs.hook('setup', function(p) {" +
             "        p.ready(function() {" +
-            "          var src = p.currentSrc();" +
-            "          if (src) window.KiwiPlus.onVideoJsReady(src);" +
-            "          p.on('loadstart', function() {" +
-            "            var s = this.currentSrc(); if (s) window.KiwiPlus.onVideoJsReady(s);" +
-            "          });" +
+            "          var src = p.currentSrc(); if (src) window.KiwiPlus.onVideoJsReady(src);" +
+            "          p.on('loadstart', function() { var s = this.currentSrc(); if (s) window.KiwiPlus.onVideoJsReady(s); });" +
             "        });" +
             "      });" +
             "    }" +
             "  }" +
             "  var count = 0;" +
             "  var interval = setInterval(function() {" +
-            "    checkVideoJs(); count++; if (count > 10) clearInterval(interval);" +
+            "    checkVideoJs(); count++; if (count > 15) clearInterval(interval);" +
             "  }, 1000);" +
             "  checkVideoJs();" +
             "})()";
@@ -889,23 +972,25 @@ public class MainActivity extends AppCompatActivity {
             "(function() {" +
             "  var url = '" + m3u8Url.replace("'", "\\'") + "';" +
             "  function doInject() {" +
-            "    if (!Hls.isSupported()) return;" +
             "    document.querySelectorAll('video').forEach(function(video) {" +
             "      var src = video.src || video.currentSrc || '';" +
             "      if (!src && video.querySelector('source')) src = video.querySelector('source').src || '';" +
-            "      if (src.indexOf('.m3u8') !== -1 || url.indexOf('.m3u8') !== -1) {" +
+            "      var targetUrl = (src && src.indexOf('.m3u8') !== -1) ? src : url;" +
+            "      if (!targetUrl) return;" +
+            "      if (Hls.isSupported()) {" +
             "        var hls = new Hls({ enableWorker:true, lowLatencyMode:true });" +
-            "        hls.loadSource(src || url);" +
+            "        hls.loadSource(targetUrl);" +
             "        hls.attachMedia(video);" +
             "        hls.on(Hls.Events.MANIFEST_PARSED, function() { video.play().catch(function(){}); });" +
+            "      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {" +
+            "        video.src = targetUrl; video.play();" +
             "      }" +
             "    });" +
             "  }" +
             "  if (typeof Hls === 'undefined') {" +
             "    var s = document.createElement('script');" +
             "    s.src = 'https://cdn.jsdelivr.net/npm/hls.js@latest';" +
-            "    s.onload = doInject;" +
-            "    document.head.appendChild(s);" +
+            "    s.onload = doInject; document.head.appendChild(s);" +
             "  } else { doInject(); }" +
             "})()";
         webView.evaluateJavascript(js, value ->
@@ -914,39 +999,140 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void injectHlsJs() {
-        if (hlsInjected) {
-            Toast.makeText(this, "✅ HLS.js כבר פעיל", Toast.LENGTH_SHORT).show();
-            return;
-        }
+        if (hlsInjected) { Toast.makeText(this, "✅ HLS.js כבר פעיל", Toast.LENGTH_SHORT).show(); return; }
         for (String u : mediaUrls) {
             if (u.contains(".m3u8")) { injectHlsIntoVideoJs(u); return; }
         }
         injectHlsIntoVideoJs("");
     }
 
-    private void showViewSource() {
-        String currentUrl = webView.getUrl();
-        if (currentUrl == null || currentUrl.startsWith(HOME_BASE) || currentUrl.startsWith(SEARCH_BASE)) {
-            Toast.makeText(this, "פתח אתר קודם", Toast.LENGTH_SHORT).show();
+    private void injectMediaScanner(WebView view) {
+        String js =
+            "(function() {" +
+            "  var urls = [];" +
+            "  document.querySelectorAll('video, audio, source').forEach(function(el) {" +
+            "    if (el.src && el.src.startsWith('http')) urls.push(el.src);" +
+            "    if (el.currentSrc && el.currentSrc.startsWith('http')) urls.push(el.currentSrc);" +
+            "  });" +
+            "  var h = document.documentElement.innerHTML;" +
+            "  var m3u = h.match(/https?:[^'\"\\s\\\\]+\\.m3u8[^'\"\\s\\\\]*/g);" +
+            "  if (m3u) m3u.forEach(function(u) { urls.push(u); });" +
+            // Kaltura
+            "  var partnerId = null, entryId = null;" +
+            "  var pm = h.match(/['\"]?partner_?[Ii]d['\"]?\\s*[:=,]\\s*['\"]?(\\d{4,})/i) ||" +
+            "           h.match(/\\/p\\/(\\d{4,})\\//i);" +
+            "  if (pm) partnerId = pm[1];" +
+            "  var em = h.match(/entry_?[Ii]d[^a-zA-Z0-9_]*([01][_][a-zA-Z0-9]+)/i);" +
+            "  if (em) entryId = em[1];" +
+            "  if (partnerId && entryId) {" +
+            "    var kUrl = 'https://cdnapisec.kaltura.com/p/' + partnerId +" +
+            "      '/sp/' + partnerId + '00/playManifest/entryId/' + entryId +" +
+            "      '/format/applehttp/protocol/https/a.m3u8';" +
+            "    urls.push(kUrl);" +
+            "    try { window.KiwiPlus.onMediaFound(kUrl); } catch(e) {}" +
+            "  }" +
+            "  document.querySelectorAll('iframe').forEach(function(el) {" +
+            "    var src = el.src || '';" +
+            "    if (src.indexOf('kaltura') !== -1 || src.indexOf('entry_id') !== -1) {" +
+            "      var ipm = src.match(/\\/p\\/(\\d{4,})/);" +
+            "      var iem = src.match(/entry_?[Ii]d[=\\/]([01][_][a-zA-Z0-9]+)/);" +
+            "      if (ipm && iem) {" +
+            "        var ikUrl = 'https://cdnapisec.kaltura.com/p/' + ipm[1] +" +
+            "          '/sp/' + ipm[1] + '00/playManifest/entryId/' + iem[1] +" +
+            "          '/format/applehttp/protocol/https/a.m3u8';" +
+            "        try { window.KiwiPlus.onMediaFound(ikUrl); } catch(e) {}" +
+            "      }" +
+            "    }" +
+            "  });" +
+            "  urls.filter(function(v,i,a){ return v && a.indexOf(v)===i; })" +
+            "    .forEach(function(u) { try { window.KiwiPlus.onMediaFound(u); } catch(e) {} });" +
+            "})()";
+        view.evaluateJavascript(js, null);
+    }
+
+    private void checkForMedia(String url) {
+        if (MEDIA_PATTERN.matcher(url).matches() || KALTURA_PATTERN.matcher(url).matches() ||
+            STREAM_PATTERN.matcher(url).matches()) {
+            if (!mediaUrls.contains(url)) {
+                mediaUrls.add(url);
+                runOnUiThread(() -> updateMediaButton(true));
+            }
+        }
+    }
+
+    private void updateMediaButton(boolean hasMedia) {
+        if (btnMedia != null)
+            btnMedia.setColorFilter(hasMedia ?
+                getResources().getColor(android.R.color.holo_purple, null) :
+                getResources().getColor(android.R.color.darker_gray, null));
+    }
+
+    private void setupButtons() {
+        btnBack.setOnClickListener(v -> { if (webView.canGoBack()) webView.goBack(); });
+        btnForward.setOnClickListener(v -> { if (webView.canGoForward()) webView.goForward(); });
+        btnHome.setOnClickListener(v -> showHomePage());
+        btnMenu.setOnClickListener(v -> showMenu());
+        btnRefresh.setOnClickListener(v -> { if (isHomePage) showHomePage(); else webView.reload(); });
+        btnMedia.setOnClickListener(v -> showMediaDialog());
+        swipeRefresh.setOnRefreshListener(() -> webView.reload());
+    }
+
+    private void showMediaDialog() {
+        if (mediaUrls.isEmpty()) {
+            Toast.makeText(this, "לא נמצאו קישורי מדיה - נסה ללחוץ Play", Toast.LENGTH_SHORT).show();
             return;
         }
-        webView.evaluateJavascript(
-            "(function() { return document.documentElement.outerHTML; })()",
-            value -> runOnUiThread(() -> {
-                String source = value
-                    .replaceAll("^\"|\"$", "")
-                    .replace("\\n", "\n")
-                    .replace("\\t", "\t")
-                    .replace("\\\"", "\"")
-                    .replace("\\'", "'");
-                String sourceHtml = "<!DOCTYPE html><html><head>" +
-                    "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
-                    "<style>body { background:#1a1a2e; color:#a0d080; font-family:monospace; font-size:11px; padding:12px; white-space:pre-wrap; word-break:break-all; }</style>" +
-                    "</head><body>" + source.replace("<", "&lt;").replace(">", "&gt;") + "</body></html>";
-                webView.loadDataWithBaseURL("https://kiwiplus.source", sourceHtml, "text/html", "UTF-8", null);
-                urlBar.setText("📄 מקור דף");
+        List<String> filtered = new ArrayList<>();
+        for (String u : mediaUrls) {
+            if (u.contains(".m3u8") || u.contains(".mp4") || u.contains(".mp3") ||
+                u.contains("playManifest") || u.contains("mainManifest") ||
+                u.contains(".webm") || u.contains(".mpd")) {
+                filtered.add(u);
+            }
+        }
+        List<String> toShow = filtered.isEmpty() ? mediaUrls : filtered;
+        String[] items = toShow.toArray(new String[0]);
+        StringBuilder allUrls = new StringBuilder();
+        for (String u : toShow) allUrls.append(u).append("\n");
+
+        new AlertDialog.Builder(this)
+            .setTitle("🎬 קישורי מדיה (" + toShow.size() + ")")
+            .setItems(items, (dialog, which) -> {
+                String selectedUrl = items[which];
+                if (selectedUrl.contains(".m3u8") || selectedUrl.contains("playManifest") ||
+                    selectedUrl.contains("mainManifest") || selectedUrl.contains(".mpd")) {
+                    openHlsPlayer(selectedUrl);
+                } else {
+                    copyToClipboard(selectedUrl);
+                    Toast.makeText(this, "✅ הקישור הועתק!", Toast.LENGTH_SHORT).show();
+                }
             })
-        );
+            .setPositiveButton("📋 העתק הכל", (dialog, which) -> {
+                copyToClipboard(allUrls.toString().trim());
+                Toast.makeText(this, "✅ כל הקישורים הועתקו!", Toast.LENGTH_SHORT).show();
+            })
+            .setNegativeButton("סגור", null)
+            .show();
+    }
+
+    private void openHlsPlayer(String m3u8Url) {
+        String playerHtml = "<!DOCTYPE html><html><head>" +
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
+            "<style>*{margin:0;padding:0;box-sizing:border-box;}body{background:#000;display:flex;align-items:center;justify-content:center;height:100vh;}video{width:100%;max-height:100vh;}</style>" +
+            "<script src='https://cdn.jsdelivr.net/npm/hls.js@latest'></script>" +
+            "</head><body><video id='v' controls autoplay playsinline></video><script>" +
+            "var url='" + m3u8Url.replace("'", "\\'") + "';" +
+            "var video=document.getElementById('v');" +
+            "if(Hls.isSupported()){" +
+            "  var hls=new Hls({enableWorker:true,lowLatencyMode:true});" +
+            "  hls.loadSource(url);hls.attachMedia(video);" +
+            "  hls.on(Hls.Events.MANIFEST_PARSED,function(){video.play().catch(function(){});});" +
+            "} else if(video.canPlayType('application/vnd.apple.mpegurl')){" +
+            "  video.src=url; video.play();" +
+            "}" +
+            "</script></body></html>";
+        webView.loadDataWithBaseURL("https://kiwiplus.player", playerHtml, "text/html", "UTF-8", null);
+        urlBar.setText("🎬 נגן HLS");
     }
 
     private void showMenu() {
@@ -985,17 +1171,40 @@ public class MainActivity extends AppCompatActivity {
         popup.show();
     }
 
+    private void toggleDesktopMode() {
+        isDesktopMode = !isDesktopMode;
+        WebSettings settings = webView.getSettings();
+        settings.setUserAgentString(isDesktopMode ? UA_DESKTOP : UA_MOBILE);
+        settings.setUseWideViewPort(!isDesktopMode);
+        settings.setLoadWithOverviewMode(!isDesktopMode);
+        Toast.makeText(this, isDesktopMode ? "🖥️ מצב מחשב פעיל" : "📱 מצב מובייל", Toast.LENGTH_SHORT).show();
+        webView.reload();
+    }
+
+    private void showViewSource() {
+        String currentUrl = webView.getUrl();
+        if (currentUrl == null || currentUrl.startsWith(HOME_BASE) || currentUrl.startsWith(SEARCH_BASE)) {
+            Toast.makeText(this, "פתח אתר קודם", Toast.LENGTH_SHORT).show(); return;
+        }
+        webView.evaluateJavascript("(function() { return document.documentElement.outerHTML; })()", value -> runOnUiThread(() -> {
+            String source = value.replaceAll("^\"|\"$", "").replace("\\n", "\n").replace("\\t", "\t").replace("\\\"", "\"");
+            String sourceHtml = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>" +
+                "<style>body { background:#1a1a2e; color:#a0d080; font-family:monospace; font-size:11px; padding:12px; white-space:pre-wrap; word-break:break-all; }</style>" +
+                "</head><body>" + source.replace("<", "&lt;").replace(">", "&gt;") + "</body></html>";
+            webView.loadDataWithBaseURL("https://kiwiplus.source", sourceHtml, "text/html", "UTF-8", null);
+            urlBar.setText("📄 מקור דף");
+        }));
+    }
+
     private void addCurrentPageAsShortcut() {
         String currentUrl = webView.getUrl();
-        String currentTitle = webView.getTitle();
         if (currentUrl == null || currentUrl.startsWith(HOME_BASE) || currentUrl.startsWith(SEARCH_BASE)) {
-            Toast.makeText(this, "פתח אתר קודם", Toast.LENGTH_SHORT).show();
-            return;
+            Toast.makeText(this, "פתח אתר קודם", Toast.LENGTH_SHORT).show(); return;
         }
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("➕ הוסף קיצור דרך");
         final EditText input = new EditText(this);
-        input.setText(currentTitle != null ? currentTitle : currentUrl);
+        input.setText(webView.getTitle() != null ? webView.getTitle() : currentUrl);
         builder.setView(input);
         final String finalUrl = currentUrl;
         builder.setPositiveButton("הוסף", (dialog, which) -> {
@@ -1003,26 +1212,21 @@ public class MainActivity extends AppCompatActivity {
                 String name = input.getText().toString();
                 String saved = prefs.getString("shortcuts", null);
                 JSONArray arr;
-                if (saved != null) {
-                    arr = new JSONArray(saved);
-                } else {
+                if (saved != null) { arr = new JSONArray(saved); }
+                else {
                     arr = new JSONArray();
                     for (String[] s : DEFAULT_SHORTCUTS) {
                         JSONObject obj = new JSONObject();
-                        obj.put("name", s[0]);
-                        obj.put("url", s[1]);
-                        obj.put("emoji", s[2]);
+                        obj.put("name", s[0]); obj.put("url", s[1]); obj.put("emoji", s[2]);
                         arr.put(obj);
                     }
                 }
                 JSONObject newShortcut = new JSONObject();
-                newShortcut.put("name", name);
-                newShortcut.put("url", finalUrl);
-                newShortcut.put("emoji", "🌐");
+                newShortcut.put("name", name); newShortcut.put("url", finalUrl); newShortcut.put("emoji", "🌐");
                 arr.put(newShortcut);
                 prefs.edit().putString("shortcuts", arr.toString()).apply();
                 Toast.makeText(this, "✅ קיצור נוסף!", Toast.LENGTH_SHORT).show();
-            } catch (Exception e) { /* ignore */ }
+            } catch (Exception e) {}
         });
         builder.setNegativeButton("ביטול", null);
         builder.show();
@@ -1042,177 +1246,38 @@ public class MainActivity extends AppCompatActivity {
         builder.show();
     }
 
-    private void toggleDesktopMode() {
-        isDesktopMode = !isDesktopMode;
-        WebSettings settings = webView.getSettings();
-        if (isDesktopMode) {
-            settings.setUserAgentString(UA_DESKTOP);
-            settings.setUseWideViewPort(false);
-            settings.setLoadWithOverviewMode(false);
-            Toast.makeText(this, "🖥️ מצב מחשב פעיל", Toast.LENGTH_SHORT).show();
-        } else {
-            settings.setUserAgentString(UA_MOBILE);
-            settings.setUseWideViewPort(true);
-            settings.setLoadWithOverviewMode(true);
-            Toast.makeText(this, "📱 מצב מובייל", Toast.LENGTH_SHORT).show();
-        }
-        webView.reload();
-    }
-
-    private void injectMediaScanner(WebView view) {
-        String js =
-            "(function() {" +
-            "  var urls = [];" +
-            // סריקת video/audio elements
-            "  document.querySelectorAll('video, audio, source').forEach(function(el) {" +
-            "    if (el.src && el.src.startsWith('http')) urls.push(el.src);" +
-            "    if (el.currentSrc && el.currentSrc.startsWith('http')) urls.push(el.currentSrc);" +
-            "  });" +
-            "  var h = document.documentElement.innerHTML;" +
-            // סריקת m3u8 ישיר
-            "  var m3u = h.match(/https?:[^'\"\\s\\\\]+\\.m3u8[^'\"\\s\\\\]*/g);" +
-            "  if (m3u) m3u.forEach(function(u) { urls.push(u); });" +
-            // סריקת Kaltura - מוצא partner_id + entry_id ובונה URL מלא
-            "  var partnerId = null;" +
-            "  var entryId = null;" +
-            // חיפוש partner_id
-            "  var pm = h.match(/['\"]?partner_?[Ii]d['\"]?\\s*[:=,]\\s*['\"]?(\\d{4,})/i);" +
-            "  if (!pm) pm = h.match(/\\/p\\/(\\d{4,})\\//i);" +
-            "  if (!pm) pm = h.match(/partnerId[^0-9]*(\\d{4,})/i);" +
-            "  if (pm) partnerId = pm[1];" +
-            // חיפוש entry_id
-            "  var em = h.match(/entry_?[Ii]d[^a-zA-Z0-9_]*([01][_][a-zA-Z0-9]+)/i);" +
-            "  if (!em) em = h.match(/entryId[^a-zA-Z0-9_]*([01][_][a-zA-Z0-9]+)/i);" +
-            "  if (em) entryId = em[1];" +
-            // בניית URL מלא של Kaltura
-            "  if (partnerId && entryId) {" +
-            "    var kUrl = 'https://cdnapisec.kaltura.com/p/' + partnerId +" +
-            "      '/sp/' + partnerId + '00/playManifest/entryId/' + entryId +" +
-            "      '/format/applehttp/protocol/https/a.m3u8';" +
-            "    urls.push(kUrl);" +
-            "    window.KiwiPlus.onMediaFound(kUrl);" +
-            "  } else if (entryId) {" +
-            // אם יש רק entry_id בלי partner_id
-            "    window.KiwiPlus.onMediaFound('kaltura:entry_id=' + entryId);" +
-            "  }" +
-            // חיפוש iframes של Kaltura
-            "  document.querySelectorAll('iframe').forEach(function(el) {" +
-            "    var src = el.src || '';" +
-            "    if (src.indexOf('kaltura') !== -1 || src.indexOf('entry_id') !== -1) {" +
-            "      urls.push(src);" +
-            // ניסיון לחלץ partner_id ו-entry_id מה-iframe src
-            "      var ipm = src.match(/\\/p\\/(\\d{4,})/);" +
-            "      var iem = src.match(/entry_?[Ii]d[=\\/]([01][_][a-zA-Z0-9]+)/);" +
-            "      if (ipm && iem) {" +
-            "        var ikUrl = 'https://cdnapisec.kaltura.com/p/' + ipm[1] +" +
-            "          '/sp/' + ipm[1] + '00/playManifest/entryId/' + iem[1] +" +
-            "          '/format/applehttp/protocol/https/a.m3u8';" +
-            "        window.KiwiPlus.onMediaFound(ikUrl);" +
-            "      }" +
-            "    }" +
-            "  });" +
-            "  urls.filter(function(v,i,a){ return v && a.indexOf(v)===i; })" +
-            "    .forEach(function(u) { window.KiwiPlus.onMediaFound(u); });" +
-            "})()";
-        view.evaluateJavascript(js, null);
-    }
-
-    private void checkForMedia(String url) {
-        if (MEDIA_PATTERN.matcher(url).matches() || KALTURA_PATTERN.matcher(url).matches() ||
-            STREAM_PATTERN.matcher(url).matches()) {
-            if (!mediaUrls.contains(url)) {
-                mediaUrls.add(url);
-                runOnUiThread(() -> updateMediaButton(true));
+    private void showKalturaEmbedDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("🎬 נגן Kaltura");
+        final EditText input = new EditText(this);
+        input.setHint("הדבק כאן את ה-iframe src של Kaltura...");
+        input.setPadding(32, 24, 32, 24);
+        builder.setView(input);
+        builder.setPositiveButton("▶ נגן", (dialog, which) -> {
+            String embedUrl = input.getText().toString().trim();
+            if (embedUrl.contains("iframe")) {
+                java.util.regex.Matcher srcM = java.util.regex.Pattern.compile("src=\"([^\"]+)\"").matcher(embedUrl);
+                if (srcM.find()) embedUrl = srcM.group(1);
             }
-        }
-    }
-
-    private void updateMediaButton(boolean hasMedia) {
-        btnMedia.setColorFilter(hasMedia ?
-            getResources().getColor(android.R.color.holo_purple, null) :
-            getResources().getColor(android.R.color.darker_gray, null));
-    }
-
-    private void setupButtons() {
-        btnBack.setOnClickListener(v -> { if (webView.canGoBack()) webView.goBack(); });
-        btnForward.setOnClickListener(v -> { if (webView.canGoForward()) webView.goForward(); });
-        btnHome.setOnClickListener(v -> showHomePage());
-        btnMenu.setOnClickListener(v -> showMenu());
-        btnRefresh.setOnClickListener(v -> { if (isHomePage) showHomePage(); else webView.reload(); });
-        btnMedia.setOnClickListener(v -> showMediaDialog());
-        swipeRefresh.setOnRefreshListener(() -> webView.reload());
-    }
-
-    private void showMediaDialog() {
-        if (mediaUrls.isEmpty()) {
-            Toast.makeText(this, "לא נמצאו קישורי מדיה", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        // סנן רק קישורי מדיה אמיתיים
-        List<String> filtered = new ArrayList<>();
-        for (String u : mediaUrls) {
-            if (u.contains(".m3u8") || u.contains(".mp4") || u.contains(".mp3") ||
-                u.contains("playManifest") || u.contains("mainManifest") ||
-                u.contains(".webm") || u.contains(".ts")) {
-                filtered.add(u);
-            }
-        }
-
-        // אם אין קישורים מסוננים - הצג הכל
-        List<String> toShow = filtered.isEmpty() ? mediaUrls : filtered;
-
-        String[] items = toShow.toArray(new String[0]);
-        StringBuilder allUrls = new StringBuilder();
-        for (String u : toShow) allUrls.append(u).append("\n");
-        String allUrlsStr = allUrls.toString().trim();
-
-        new AlertDialog.Builder(this)
-            .setTitle("🎬 קישורי מדיה (" + toShow.size() + ")")
-            .setItems(items, (dialog, which) -> {
-                String selectedUrl = items[which];
-                if (selectedUrl.contains(".m3u8") || selectedUrl.contains("playManifest") ||
-                    selectedUrl.contains("mainManifest")) {
-                    openHlsPlayer(selectedUrl);
+            try {
+                java.util.regex.Matcher pm = java.util.regex.Pattern.compile("/p/(\\d+)/").matcher(embedUrl);
+                java.util.regex.Matcher em = java.util.regex.Pattern.compile("(?:entry_id|entryId)[=\\/]([a-zA-Z0-9_]+)").matcher(embedUrl);
+                if (pm.find() && em.find()) {
+                    String partnerId = pm.group(1), entryId = em.group(1);
+                    String m3u8 = "https://cdnapisec.kaltura.com/p/" + partnerId + "/sp/" + partnerId + "00/playManifest/entryId/" + entryId + "/format/applehttp/protocol/https/a.m3u8";
+                    openHlsPlayer(m3u8);
                 } else {
-                    copyToClipboard(selectedUrl);
-                    Toast.makeText(this, "✅ הקישור הועתק!", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "❌ לא נמצא entry_id", Toast.LENGTH_LONG).show();
                 }
-            })
-            .setPositiveButton("📋 העתק הכל", (dialog, which) -> {
-                copyToClipboard(allUrlsStr);
-                Toast.makeText(this, "✅ כל הקישורים הועתקו!", Toast.LENGTH_SHORT).show();
-            })
-            .setNegativeButton("סגור", null)
-            .show();
-    }
-
-    private void openHlsPlayer(String m3u8Url) {
-        String playerHtml = "<!DOCTYPE html><html><head>" +
-            "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
-            "<style>*{margin:0;padding:0;box-sizing:border-box;}body{background:#000;display:flex;align-items:center;justify-content:center;height:100vh;}video{width:100%;max-height:100vh;}</style>" +
-            "<script src='https://cdn.jsdelivr.net/npm/hls.js@latest'></script>" +
-            "</head><body><video id='v' controls autoplay playsinline></video><script>" +
-            "var url='" + m3u8Url.replace("'", "\\'") + "';" +
-            "var video=document.getElementById('v');" +
-            "if(Hls.isSupported()){" +
-            "  var hls=new Hls({enableWorker:true,lowLatencyMode:true});" +
-            "  hls.loadSource(url);" +
-            "  hls.attachMedia(video);" +
-            "  hls.on(Hls.Events.MANIFEST_PARSED,function(){video.play().catch(function(){});});" +
-            "} else if(video.canPlayType('application/vnd.apple.mpegurl')){" +
-            "  video.src=url; video.play();" +
-            "}" +
-            "</script></body></html>";
-        webView.loadDataWithBaseURL("https://kiwiplus.player", playerHtml, "text/html", "UTF-8", null);
-        urlBar.setText("🎬 נגן HLS");
+            } catch (Exception e) { Toast.makeText(this, "שגיאה: " + e.getMessage(), Toast.LENGTH_SHORT).show(); }
+        });
+        builder.setNegativeButton("ביטול", null);
+        builder.show();
     }
 
     private void copyToClipboard(String text) {
-        android.content.ClipboardManager clipboard =
-            (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        android.content.ClipData clip = android.content.ClipData.newPlainText("url", text);
-        clipboard.setPrimaryClip(clip);
+        android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("url", text));
     }
 
     private void setupUrlBar() {
@@ -1231,57 +1296,10 @@ public class MainActivity extends AppCompatActivity {
         isHomePage = false;
         isSearchResults = false;
         String url;
-        if (input.startsWith("http://") || input.startsWith("https://")) {
-            url = input;
-        } else if (input.contains(".") && !input.contains(" ")) {
-            url = "https://" + input;
-        } else {
-            performSearch(input);
-            return;
-        }
+        if (input.startsWith("http://") || input.startsWith("https://")) { url = input; }
+        else if (input.contains(".") && !input.contains(" ") && !input.startsWith(".")) { url = "https://" + input; }
+        else { performSearch(input); return; }
         webView.loadUrl(url);
-    }
-
-    private void showKalturaEmbedDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("🎬 נגן Kaltura");
-        final EditText input = new EditText(this);
-        input.setHint("הדבק כאן את ה-iframe src של Kaltura...");
-        input.setPadding(32, 24, 32, 24);
-        builder.setView(input);
-        builder.setMessage("הדבק את קוד ה-Embed שמכיל cdnapisec.kaltura.com");
-        builder.setPositiveButton("▶ נגן", (dialog, which) -> {
-            String embedUrl = input.getText().toString().trim();
-            // נקה את הקוד אם המשתמש הדביק iframe מלא
-            if (embedUrl.contains("iframe")) {
-                java.util.regex.Matcher srcM = java.util.regex.Pattern
-                    .compile("src=\"([^\"]+)\"")
-                    .matcher(embedUrl);
-                if (srcM.find()) embedUrl = srcM.group(1);
-            }
-            try {
-                java.util.regex.Matcher pm = java.util.regex.Pattern
-                    .compile("/p/(\\d+)/").matcher(embedUrl);
-                java.util.regex.Matcher em = java.util.regex.Pattern
-                    .compile("(?:entry_id|entryId)[=\\/]([a-zA-Z0-9_]+)")
-                    .matcher(embedUrl);
-                if (pm.find() && em.find()) {
-                    String partnerId = pm.group(1);
-                    String entryId = em.group(1);
-                    String m3u8 = "https://cdnapisec.kaltura.com/p/" + partnerId +
-                        "/sp/" + partnerId + "00/playManifest/entryId/" + entryId +
-                        "/format/applehttp/protocol/https/a.m3u8";
-                    openHlsPlayer(m3u8);
-                    Toast.makeText(this, "🎬 מנגן: " + entryId, Toast.LENGTH_SHORT).show();
-                } else {
-                    Toast.makeText(this, "❌ לא נמצא entry_id - וודא שהדבקת embed של Kaltura", Toast.LENGTH_LONG).show();
-                }
-            } catch (Exception e) {
-                Toast.makeText(this, "שגיאה: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-            }
-        });
-        builder.setNegativeButton("ביטול", null);
-        builder.show();
     }
 
     @Override
