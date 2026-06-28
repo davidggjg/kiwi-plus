@@ -699,21 +699,16 @@ public class MainActivity extends AppCompatActivity {
                 String host = request.getUrl().getHost();
 
                 // רק אם הוסט ידוע כחסום - שלח דרך פרוקסי
-                // כל שאר הבקשות - תן ל-WebView לטעון לבד (מהיר!)
                 if (host != null && blockedHosts.contains(host)) {
-                    // רק HTML ראשי דרך פרוקסי - שאר ה-resources ישירות
-                    String type = request.getResourceType();
-                    if ("xmlhttprequest".equals(type) || "fetch".equals(type) ||
-                        url.equals(request.getUrl().toString()) && request.isForMainFrame()) {
+                    if (request.isForMainFrame()) {
                         return fetchViaProxyFast(url, request);
                     }
-                    return null; // resources טוענים ישירות
+                    return null; // resources (JS/CSS/תמונות) - ישירות
                 }
 
-                // רק לבקשות ראשיות (main frame) בדוק אם נחסם
-                // resources כמו JS/CSS/תמונות - תמיד ישירות
-                if (!request.isForMainFrame() && !"xmlhttprequest".equals(request.getResourceType())) {
-                    return null; // תן ל-WebView לטעון לבד
+                // רק main frame נבדק - resources תמיד ישירות
+                if (!request.isForMainFrame()) {
+                    return null;
                 }
 
                 // בדוק רק HTML ראשי ו-XHR requests
